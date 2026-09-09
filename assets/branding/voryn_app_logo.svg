@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="voryn" x1="110" y1="150" x2="420" y2="390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#19E7F2"/><stop offset=".52" stop-color="#2D8CFF"/><stop offset="1" stop-color="#8B4DFF"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#voryn)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 356 150 250" stroke-width="34"/>
+    <path d="M256 356 362 250" stroke-width="34"/>
+    <path d="M206 198c28-21 72-21 100 0" stroke-width="24"/>
+    <path d="M164 156c51-39 133-39 184 0" stroke-width="22" opacity=".92"/>
+    <path d="M122 116c74-58 194-58 268 0" stroke-width="20" opacity=".8"/>
+  </g>
+</svg>
