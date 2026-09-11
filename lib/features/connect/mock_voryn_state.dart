@@ -1,4 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../shared/widgets/voryn_presence.dart';
+import '../contacts/voryn_contact_service.dart';
+import 'voryn_discovery_service.dart';
 
 enum VorynCallType { audio, video }
 
@@ -8,6 +15,7 @@ enum VorynCallStatus { completed, missed, declined, failed }
 
 class VorynMockUser {
   const VorynMockUser({
+    this.backendUid,
     required this.customName,
     required this.name,
     required this.id,
@@ -17,6 +25,7 @@ class VorynMockUser {
     required this.initials,
   });
 
+  final String? backendUid;
   final String? customName;
   final String name;
   final String id;
@@ -28,7 +37,37 @@ class VorynMockUser {
   String get displayName => mockContacts[id]?.customName ?? customName ?? name;
   bool get isSaved => mockContacts.containsKey(id) || customName != null;
   bool get isFavorite => mockContacts[id]?.isFavorite ?? false;
+
+  factory VorynMockUser.fromDiscovery(VorynDiscoveryResult result) {
+    final name = result.displayName.trim().isEmpty
+        ? result.vorynId
+        : result.displayName.trim();
+    final initials = name
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part[0].toUpperCase())
+        .join();
+    return VorynMockUser(
+      backendUid: result.uid,
+      customName: null,
+      name: name,
+      id: result.vorynId.startsWith('@')
+          ? result.vorynId
+          : '@${result.vorynId}',
+      phone: result.phone ?? '',
+      email: '',
+      presence: _presenceFromValue(result.presence),
+      initials: initials.isEmpty ? '?' : initials,
+    );
+  }
 }
+
+VorynPresenceStatus _presenceFromValue(String? value) => switch (value) {
+  'online' => VorynPresenceStatus.online,
+  'busy' => VorynPresenceStatus.busy,
+  _ => VorynPresenceStatus.offline,
+};
 
 class VorynMockContact {
   const VorynMockContact({
@@ -72,73 +111,12 @@ class VorynMockCall {
   final String? duration;
 }
 
-final mockContacts = <String, VorynMockContact>{
-  '@rahul': const VorynMockContact(
-    userId: '@rahul',
-    customName: 'Bhai',
-    isFavorite: true,
-  ),
-  '@aman': const VorynMockContact(
-    userId: '@aman',
-    customName: 'College Aman',
-    isFavorite: true,
-  ),
-  '@rahul_work': const VorynMockContact(
-    userId: '@rahul_work',
-    customName: 'Rahul Office',
-  ),
-};
+final mockContacts = <String, VorynMockContact>{};
 
 final mockBlockedIds = <String>{};
 final mockRemovedHistoryUserIds = <String>{};
 
-const mockVorynUsers = [
-  VorynMockUser(
-    customName: 'Bhai',
-    name: 'Rahul Sharma',
-    id: '@rahul',
-    phone: '+91 99123 45678',
-    email: 'rahul@example.com',
-    presence: VorynPresenceStatus.online,
-    initials: 'RS',
-  ),
-  VorynMockUser(
-    customName: 'College Aman',
-    name: 'Aman Verma',
-    id: '@aman',
-    phone: '+91 98111 22334',
-    email: 'aman@example.com',
-    presence: VorynPresenceStatus.online,
-    initials: 'AV',
-  ),
-  VorynMockUser(
-    customName: null,
-    name: 'Sarah',
-    id: '@sarah',
-    phone: '+1 202 555 0187',
-    email: 'sarah@example.com',
-    presence: VorynPresenceStatus.busy,
-    initials: 'S',
-  ),
-  VorynMockUser(
-    customName: 'Rahul Office',
-    name: 'Rahul Mehta',
-    id: '@rahul_work',
-    phone: '+91 99887 77665',
-    email: 'rahul.work@example.com',
-    presence: VorynPresenceStatus.offline,
-    initials: 'RM',
-  ),
-  VorynMockUser(
-    customName: null,
-    name: 'Alex Johnson',
-    id: '@alex',
-    phone: '+1 202 555 0144',
-    email: 'alex@example.com',
-    presence: VorynPresenceStatus.online,
-    initials: 'AJ',
-  ),
-];
+final mockVorynUsers = <VorynMockUser>[];
 
 final mockRecentCalls = <VorynMockCall>[
   const VorynMockCall(
@@ -226,6 +204,14 @@ void saveMockContact(VorynMockUser user, String customName) {
     customName: customName,
     isFavorite: current?.isFavorite ?? false,
   );
+  unawaited(_persistContactState());
+  unawaited(
+    const VorynContactService().saveContact(
+      vorynId: user.id,
+      customName: customName,
+      favorite: current?.isFavorite ?? false,
+    ),
+  );
 }
 
 void setMockFavorite(VorynMockUser user, bool isFavorite) {
@@ -236,11 +222,114 @@ void setMockFavorite(VorynMockUser user, bool isFavorite) {
       customName: user.displayName,
       isFavorite: isFavorite,
     );
+    unawaited(_persistContactState());
+    unawaited(
+      const VorynContactService().saveContact(
+        vorynId: user.id,
+        customName: user.displayName,
+        favorite: isFavorite,
+      ),
+    );
     return;
   }
   mockContacts[user.id] = current.copyWith(isFavorite: isFavorite);
+  unawaited(_persistContactState());
+  unawaited(const VorynContactService().setFavorite(user.id, isFavorite));
 }
 
 void removeMockContact(VorynMockUser user) {
   mockContacts.remove(user.id);
+  unawaited(_persistContactState());
+  unawaited(const VorynContactService().removeContact(user.id));
+}
+
+void setMockBlocked(VorynMockUser user, bool blocked) {
+  if (blocked) {
+    mockBlockedIds.add(user.id);
+  } else {
+    mockBlockedIds.remove(user.id);
+  }
+  unawaited(_persistContactState());
+  unawaited(const VorynContactService().setBlocked(user.id, blocked));
+}
+
+Future<void> initializeVorynContactState() async {
+  final preferences = await SharedPreferences.getInstance();
+  final encoded = preferences.getString(_contactCacheKey);
+  if (encoded != null) {
+    try {
+      final data = jsonDecode(encoded) as Map<String, dynamic>;
+      final contacts = data['contacts'] as Map<String, dynamic>?;
+      if (contacts != null) {
+        for (final entry in contacts.entries) {
+          final value = Map<String, dynamic>.from(entry.value as Map);
+          mockContacts[entry.key] = VorynMockContact(
+            userId: entry.key,
+            customName: value['customName'] as String? ?? entry.key,
+            isFavorite: value['favorite'] == true,
+          );
+        }
+      }
+      mockBlockedIds.addAll(
+        (data['blocked'] as List<dynamic>? ?? const []).cast<String>(),
+      );
+    } catch (_) {
+      // Ignore malformed cache and recover from Supabase when available.
+    }
+  }
+}
+
+void mergeSyncedContacts(List<VorynStoredContact> contacts) {
+  for (final contact in contacts) {
+    final id = contact.vorynId.startsWith('@')
+        ? contact.vorynId
+        : '@${contact.vorynId}';
+    var user = findMockUser(id);
+    if (user == null) {
+      final initials = contact.name
+          .trim()
+          .split(RegExp(r'\s+'))
+          .where((part) => part.isNotEmpty)
+          .take(2)
+          .map((part) => part[0].toUpperCase())
+          .join();
+      user = VorynMockUser(
+        backendUid: contact.uid,
+        customName: contact.displayName,
+        name: contact.name,
+        id: id,
+        phone: contact.phone ?? '',
+        email: '',
+        presence: VorynPresenceStatus.offline,
+        initials: initials.isEmpty ? '?' : initials,
+      );
+      mockVorynUsers.add(user);
+    }
+    mockContacts[id] = VorynMockContact(
+      userId: id,
+      customName: contact.displayName,
+      isFavorite: contact.favorite,
+    );
+    if (contact.blocked) mockBlockedIds.add(id);
+  }
+  unawaited(_persistContactState());
+}
+
+const _contactCacheKey = 'voryn.contacts.v2';
+
+Future<void> _persistContactState() async {
+  final preferences = await SharedPreferences.getInstance();
+  await preferences.setString(
+    _contactCacheKey,
+    jsonEncode({
+      'contacts': {
+        for (final entry in mockContacts.entries)
+          entry.key: {
+            'customName': entry.value.customName,
+            'favorite': entry.value.isFavorite,
+          },
+      },
+      'blocked': mockBlockedIds.toList(),
+    }),
+  );
 }

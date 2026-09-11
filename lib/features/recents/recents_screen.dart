@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_avatar.dart';
-import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
@@ -68,7 +67,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
         children: [
           VorynGlobalHeader(
             title: 'Recents',
-            subtitle: 'Your recent VoRyn calls',
+            subtitle: 'Your recent Voryn calls',
           ),
           Row(
             children: [
@@ -441,75 +440,6 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
     builder: (_) => QuickMessageSheet(user: widget.user),
   );
 
-  void _showConnectSheet(BuildContext context) => showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'How do you want to connect?',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 16),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: _ConnectActionTile(
-                    icon: Icons.phone_outlined,
-                    label: 'Audio call',
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => AudioCallScreen(user: widget.user),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                Expanded(
-                  child: _ConnectActionTile(
-                    icon: Icons.videocam_outlined,
-                    label: 'Video call',
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => VideoPreCallScreen(user: widget.user),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                Expanded(
-                  child: _ConnectActionTile(
-                    icon: Icons.chat_bubble_outline_rounded,
-                    label: 'Message',
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      _showMessageSheet(context);
-                    },
-                  ),
-                ),
-              ],
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(sheetContext),
-              child: const Text('Cancel'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-
   void _confirmRemoveHistory(BuildContext context) => showDialog<void>(
     context: context,
     builder: (dialogContext) => AlertDialog(
@@ -543,7 +473,7 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
     builder: (dialogContext) => AlertDialog(
       title: const Text('Block this user?'),
       content: Text(
-        '${widget.user.displayName} won\'t be able to contact you on VoRyn while blocked.',
+        '${widget.user.displayName} won\'t be able to contact you on Voryn while blocked.',
       ),
       actions: [
         TextButton(
@@ -552,7 +482,7 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
         ),
         TextButton(
           onPressed: () {
-            mockBlockedIds.add(widget.user.id);
+            setMockBlocked(widget.user, true);
             Navigator.pop(dialogContext);
             _feedback('User blocked');
           },
@@ -698,7 +628,7 @@ class _EmptyRecents extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Your VoRyn calls will appear here.',
+            'Your Voryn calls will appear here.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),

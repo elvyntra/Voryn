@@ -1,9 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'core/backend/voryn_backend.dart';
 import 'core/theme/voryn_theme.dart';
+import 'core/theme/voryn_theme_controller.dart';
 import 'features/auth/auth_screens.dart';
+import 'features/auth/voryn_auth_service.dart';
 import 'features/connect/connect_screen.dart';
+import 'features/connect/mock_voryn_state.dart';
 import 'features/contacts/contacts_screen.dart';
 import 'features/recents/recents_screen.dart';
 import 'features/meetings/meetings_screen.dart';
@@ -12,25 +19,79 @@ import 'shared/widgets/voryn_avatar.dart';
 import 'shared/widgets/voryn_card.dart';
 import 'shared/widgets/voryn_presence.dart';
 
-void main() => runApp(const VorynApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final controller = VorynThemeController();
+  await controller.load();
+  await VorynBackend.initialize();
+  await initializeVorynContactState();
+  runApp(VorynApp(controller: controller));
+}
 
-class VorynApp extends StatelessWidget {
-  const VorynApp({super.key});
+class VorynApp extends StatefulWidget {
+  const VorynApp({super.key, this.controller, this.initialLocation});
+  final VorynThemeController? controller;
+  final String? initialLocation;
+  @override
+  State<VorynApp> createState() => _VorynAppState();
+}
+
+class _VorynAppState extends State<VorynApp> {
+  final _auth = const VorynAuthService();
+  late final VorynThemeController _controller =
+      widget.controller ?? VorynThemeController();
+  late final GoRouter _router = _buildRouter(
+    initialLocation: widget.initialLocation,
+  );
+  StreamSubscription<AuthState>? _authSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_auth.isAvailable) {
+      _authSubscription = _auth.authStateChanges.listen((state) {
+        final user = state.session?.user;
+        if (user == null || !mounted) return;
+        if (state.event == AuthChangeEvent.passwordRecovery) {
+          _router.go('/reset-password');
+        } else if (state.event == AuthChangeEvent.signedIn ||
+            state.event == AuthChangeEvent.initialSession) {
+          _router.go(_auth.routeAfterAuthentication(user));
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    _router.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp.router(
-      title: 'VoRyn',
-      debugShowCheckedModeBanner: false,
-      theme: VorynTheme.light,
-      darkTheme: VorynTheme.dark,
-      themeMode: ThemeMode.dark,
-      routerConfig: _buildRouter(),
+    if (widget.controller == null) {
+      return _buildApp(ThemeMode.system);
+    }
+
+    return ListenableBuilder(
+      listenable: _controller,
+      builder: (context, _) => _buildApp(_controller.mode),
     );
   }
+
+  Widget _buildApp(ThemeMode mode) => MaterialApp.router(
+    title: 'Voryn',
+    debugShowCheckedModeBanner: false,
+    theme: VorynTheme.light,
+    darkTheme: VorynTheme.dark,
+    themeMode: mode,
+    routerConfig: _router,
+  );
 }
 
-GoRouter _buildRouter() {
+GoRouter _buildRouter({String? initialLocation}) {
   final rootNavigatorKey = GlobalKey<NavigatorState>();
   final shellNavigatorConnectKey = GlobalKey<NavigatorState>(
     debugLabel: 'connect',
@@ -47,7 +108,7 @@ GoRouter _buildRouter() {
 
   return GoRouter(
     navigatorKey: rootNavigatorKey,
-    initialLocation: '/splash',
+    initialLocation: initialLocation ?? '/splash',
     routes: [
       GoRoute(
         path: '/splash',
@@ -70,12 +131,12 @@ GoRouter _buildRouter() {
         builder: (context, state) => const ForgotPasswordScreen(),
       ),
       GoRoute(
-        path: '/onboarding/profile',
-        builder: (context, state) => const CompleteProfileScreen(),
+        path: '/reset-password',
+        builder: (context, state) => const ResetPasswordScreen(),
       ),
       GoRoute(
-        path: '/onboarding/verify-phone',
-        builder: (context, state) => const VerifyPhoneScreen(),
+        path: '/onboarding/profile',
+        builder: (context, state) => const CompleteProfileScreen(),
       ),
       GoRoute(
         path: '/onboarding/voryn-id',

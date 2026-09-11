@@ -7,6 +7,7 @@ class VorynTextInput extends StatelessWidget {
     super.key,
     required this.label,
     this.controller,
+    this.focusNode,
     this.hintText,
     this.prefixIcon,
     this.suffixIcon,
@@ -22,6 +23,7 @@ class VorynTextInput extends StatelessWidget {
 
   final String label;
   final TextEditingController? controller;
+  final FocusNode? focusNode;
   final String? hintText;
   final IconData? prefixIcon;
   final Widget? suffixIcon;
@@ -40,6 +42,7 @@ class VorynTextInput extends StatelessWidget {
 
     return TextField(
       controller: controller,
+      focusNode: focusNode,
       enabled: enabled && !isLoading,
       keyboardType: keyboardType,
       obscureText: obscureText,

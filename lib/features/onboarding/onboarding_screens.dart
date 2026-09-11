@@ -1,30 +1,92 @@
-import 'dart:async';
+import 'dart:math' as math;
 
+import 'package:country_picker/country_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_text_input.dart';
+import '../profile/voryn_profile_service.dart';
 
 class OnboardingData {
-  String fullName = 'Vikash Mishra';
-  String email = 'vikash@example.com';
+  String? userId;
+  String fullName = '';
+  String email = '';
+  bool emailVerified = false;
   String countryCode = '+91';
-  String phone = '98765 43210';
+  String countryIsoCode = 'IN';
+  String phone = '';
   bool phoneVerified = false;
   bool avatarSelected = false;
   String vorynId = '';
+
+  void prepareFromUser(User? user) {
+    if (user == null) {
+      _reset();
+      return;
+    }
+    if (userId == user.id) return;
+    final metadata = user.userMetadata ?? const <String, dynamic>{};
+    userId = user.id;
+    fullName = (metadata['full_name'] ?? metadata['name'] ?? '').toString();
+    email = user.email ?? '';
+    emailVerified = user.emailConfirmedAt != null;
+    phone = user.phone ?? '';
+    countryCode = '+91';
+    countryIsoCode = 'IN';
+    phoneVerified = false;
+    avatarSelected = false;
+    vorynId = '';
+  }
+
+  void _reset() {
+    userId = null;
+    fullName = '';
+    email = '';
+    emailVerified = false;
+    countryCode = '+91';
+    countryIsoCode = 'IN';
+    phone = '';
+    phoneVerified = false;
+    avatarSelected = false;
+    vorynId = '';
+  }
+
+  String get initials {
+    final parts = fullName
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .toList();
+    if (parts.isEmpty) return '?';
+    return parts.map((part) => part[0].toUpperCase()).join();
+  }
+
+  String get e164Phone {
+    final localNumber = phone
+        .replaceAll(RegExp(r'\D'), '')
+        .replaceFirst(RegExp(r'^0+'), '');
+    return '$countryCode$localNumber';
+  }
 }
 
 final onboardingData = OnboardingData();
 
 class OnboardingShell extends StatelessWidget {
-  const OnboardingShell({super.key, required this.step, required this.child});
+  const OnboardingShell({
+    super.key,
+    required this.step,
+    required this.child,
+    this.dismissKeyboardOnTap = true,
+  });
 
   final int step;
   final Widget child;
+  final bool dismissKeyboardOnTap;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +96,7 @@ class OnboardingShell extends StatelessWidget {
       resizeToAvoidBottomInset: true,
       body: SafeArea(
         child: GestureDetector(
-          onTap: FocusScope.of(context).unfocus,
+          onTap: dismissKeyboardOnTap ? FocusScope.of(context).unfocus : null,
           child: LayoutBuilder(
             builder: (context, constraints) => SingleChildScrollView(
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -46,7 +108,10 @@ class OnboardingShell extends StatelessWidget {
               ),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  minHeight: constraints.maxHeight - spacing.sm - spacing.lg,
+                  minHeight: math.max(
+                    0,
+                    constraints.maxHeight - spacing.sm - spacing.lg,
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -92,25 +157,30 @@ class CompleteProfileScreen extends StatefulWidget {
 
 class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
   late final TextEditingController _name;
+  late final TextEditingController _email;
   late final TextEditingController _phone;
   String? _nameError;
   String? _phoneError;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+    onboardingData.prepareFromUser(const VorynProfileService().currentUser);
     _name = TextEditingController(text: onboardingData.fullName);
+    _email = TextEditingController(text: onboardingData.email);
     _phone = TextEditingController(text: onboardingData.phone);
   }
 
   @override
   void dispose() {
     _name.dispose();
+    _email.dispose();
     _phone.dispose();
     super.dispose();
   }
 
-  void _continue() {
+  Future<void> _continue() async {
     final name = _name.text.trim();
     final digits = _phone.text.replaceAll(RegExp(r'\D'), '');
     setState(() {
@@ -122,9 +192,53 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
           : null;
     });
     if (_nameError != null || _phoneError != null) return;
+
     onboardingData.fullName = name;
     onboardingData.phone = _phone.text.trim();
-    context.push('/onboarding/verify-phone');
+    setState(() => _saving = true);
+    final error = await const VorynProfileService().savePhone(
+      fullName: onboardingData.fullName,
+      phone: onboardingData.e164Phone,
+    );
+    if (!mounted) return;
+    if (error != null) {
+      setState(() {
+        _saving = false;
+        _phoneError = error;
+      });
+      return;
+    }
+    setState(() => _saving = false);
+    context.push('/onboarding/voryn-id');
+  }
+
+  void _selectCountry() {
+    final colors = context.vorynColors;
+    showCountryPicker(
+      context: context,
+      showPhoneCode: true,
+      favorite: const ['IN'],
+      countryListTheme: CountryListThemeData(
+        backgroundColor: colors.backgroundSoft,
+        textStyle: Theme.of(context).textTheme.bodyMedium,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+        inputDecoration: InputDecoration(
+          labelText: 'Search countries',
+          hintText: 'Country or calling code',
+          prefixIcon: const Icon(Icons.search_rounded),
+          border: OutlineInputBorder(
+            borderSide: BorderSide(color: colors.border),
+          ),
+        ),
+      ),
+      onSelect: (country) {
+        setState(() {
+          onboardingData.countryCode = '+${country.phoneCode}';
+          onboardingData.countryIsoCode = country.countryCode;
+          _phoneError = null;
+        });
+      },
+    );
   }
 
   @override
@@ -142,7 +256,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
           ),
           SizedBox(height: spacing.sm),
           Text(
-            'Help people recognize you on VoRyn.',
+            'Help people recognize you on Voryn.',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           SizedBox(height: spacing.xl),
@@ -156,7 +270,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
                   child: onboardingData.avatarSelected
                       ? const Icon(Icons.person, size: 42)
                       : Text(
-                          'VM',
+                          onboardingData.initials,
                           style: Theme.of(context).textTheme.titleLarge
                               ?.copyWith(color: colors.accent),
                         ),
@@ -188,36 +302,54 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
           SizedBox(height: spacing.md),
           VorynTextInput(
             label: 'Email',
-            controller: TextEditingController(text: onboardingData.email),
+            controller: _email,
             enabled: false,
             prefixIcon: Icons.alternate_email_rounded,
-            suffixIcon: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.check_circle, color: colors.success, size: 18),
-                const SizedBox(width: 6),
-                Text(
-                  'Verified',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelSmall?.copyWith(color: colors.success),
-                ),
-                const SizedBox(width: 12),
-              ],
-            ),
+            suffixIcon: onboardingData.emailVerified
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check_circle, color: colors.success, size: 18),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Verified',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelSmall?.copyWith(color: colors.success),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                  )
+                : null,
           ),
           SizedBox(height: spacing.md),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 84,
-                child: VorynTextInput(
-                  label: 'Code',
-                  controller: TextEditingController(
-                    text: onboardingData.countryCode,
+                width: 124,
+                child: Semantics(
+                  button: true,
+                  label: 'Choose country calling code',
+                  child: InkWell(
+                    onTap: _saving ? null : _selectCountry,
+                    borderRadius: BorderRadius.circular(8),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(labelText: 'Country'),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${onboardingData.countryIsoCode} ${onboardingData.countryCode}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const Icon(Icons.arrow_drop_down_rounded),
+                        ],
+                      ),
+                    ),
                   ),
-                  keyboardType: TextInputType.phone,
                 ),
               ),
               SizedBox(width: spacing.sm),
@@ -227,6 +359,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
                   controller: _phone,
                   prefixIcon: Icons.phone_outlined,
                   keyboardType: TextInputType.phone,
+                  enabled: !_saving,
                   errorText: _phoneError,
                   textInputAction: TextInputAction.done,
                   onChanged: (_) => setState(() => _phoneError = null),
@@ -236,141 +369,10 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
             ],
           ),
           SizedBox(height: spacing.xxl),
-          VorynButton.primary(label: 'Continue', onPressed: _continue),
-        ],
-      ),
-    );
-  }
-}
-
-class VerifyPhoneScreen extends StatefulWidget {
-  const VerifyPhoneScreen({super.key});
-
-  @override
-  State<VerifyPhoneScreen> createState() => _VerifyPhoneScreenState();
-}
-
-class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
-  final _otp = TextEditingController();
-  String? _error;
-  bool _checking = false;
-  int _resendSeconds = 28;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _resendSeconds > 0) setState(() => _resendSeconds--);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _otp.dispose();
-    super.dispose();
-  }
-
-  Future<void> _verify() async {
-    FocusScope.of(context).unfocus();
-    if (_otp.text.length != 6) {
-      setState(() => _error = 'Enter the 6-digit verification code');
-      return;
-    }
-    setState(() {
-      _checking = true;
-      _error = null;
-    });
-    await Future<void>.delayed(const Duration(milliseconds: 450));
-    if (!mounted) return;
-    if (_otp.text != '123456') {
-      setState(() {
-        _checking = false;
-        _error = 'Incorrect verification code';
-      });
-      return;
-    }
-    onboardingData.phoneVerified = true;
-    setState(() => _checking = false);
-    context.push('/onboarding/voryn-id');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final spacing = context.vorynSpacing;
-    return OnboardingShell(
-      step: 2,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Verify your number',
-            style: Theme.of(context).textTheme.headlineMedium,
-          ),
-          SizedBox(height: spacing.sm),
-          Text(
-            'We sent a 6-digit verification code to ${onboardingData.countryCode} ${onboardingData.phone}.',
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
-          SizedBox(height: spacing.xxl),
-          TextField(
-            controller: _otp,
-            autofocus: true,
-            maxLength: 6,
-            keyboardType: TextInputType.number,
-            textInputAction: TextInputAction.done,
-            onChanged: (_) => setState(() => _error = null),
-            onSubmitted: (_) => _verify(),
-            style: Theme.of(
-              context,
-            ).textTheme.headlineSmall?.copyWith(letterSpacing: 10),
-            textAlign: TextAlign.center,
-            decoration: const InputDecoration(
-              counterText: '',
-              hintText: '• • • • • •',
-            ),
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: context.vorynColors.danger),
-              ),
-            ),
-          SizedBox(height: spacing.lg),
-          Center(
-            child: _resendSeconds > 0
-                ? Text(
-                    'Resend in 00:${_resendSeconds.toString().padLeft(2, '0')}',
-                    style: Theme.of(context).textTheme.labelMedium,
-                  )
-                : TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _resendSeconds = 28;
-                        _error = null;
-                      });
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Verification code sent')),
-                      );
-                    },
-                    child: const Text('Resend code'),
-                  ),
-          ),
-          Center(
-            child: TextButton(
-              onPressed: () => context.pop(),
-              child: const Text('Change number'),
-            ),
-          ),
-          SizedBox(height: spacing.xxl),
           VorynButton.primary(
-            label: 'Verify',
-            isLoading: _checking,
-            onPressed: _checking || _otp.text.length != 6 ? null : _verify,
+            label: 'Continue',
+            isLoading: _saving,
+            onPressed: _saving ? null : _continue,
           ),
         ],
       ),
@@ -386,63 +388,106 @@ class CreateVorynIdScreen extends StatefulWidget {
 }
 
 class _CreateVorynIdScreenState extends State<CreateVorynIdScreen> {
+  final _profileService = const VorynProfileService();
   final _username = TextEditingController();
-  Timer? _debounce;
   String? _state;
   bool _checking = false;
+  bool _creating = false;
+  String? _serviceError;
   static const _taken = {'rahul', 'admin', 'support', 'voryn', 'test'};
 
   @override
   void dispose() {
-    _debounce?.cancel();
     _username.dispose();
     super.dispose();
   }
 
-  void _check(String value) {
-    _debounce?.cancel();
+  void _handleChanged(String value) {
     setState(() {
       _state = null;
-      _checking = value.isNotEmpty;
+      _serviceError = null;
     });
-    if (value.isEmpty) {
-      setState(() => _checking = false);
+  }
+
+  Future<void> _checkAvailability() async {
+    final normalized = _normalizedId;
+    final validationError = _validationError(normalized);
+    if (validationError != null) {
+      setState(() {
+        _state = 'invalid';
+        _serviceError = null;
+      });
       return;
     }
-    _debounce = Timer(const Duration(milliseconds: 450), () {
-      final normalized = value.replaceFirst('@', '').toLowerCase();
-      final valid =
-          RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(normalized) &&
-          normalized.length >= 3 &&
-          normalized.length <= 24;
-      if (!mounted) return;
-      setState(() {
-        _checking = false;
-        _state = !valid
-            ? 'invalid'
-            : _taken.contains(normalized)
-            ? 'taken'
-            : 'available';
-      });
+    if (_taken.contains(normalized)) {
+      setState(() => _state = 'taken');
+      return;
+    }
+
+    setState(() {
+      _checking = true;
+      _state = null;
+      _serviceError = null;
     });
+    final checkedId = normalized;
+    final result = await _profileService.checkVorynIdAvailability(checkedId);
+    if (!mounted || checkedId != _normalizedId) return;
+    setState(() {
+      _checking = false;
+      _serviceError = result.error;
+      _state = result.error != null
+          ? 'error'
+          : result.isAvailable == true
+          ? 'available'
+          : 'taken';
+    });
+  }
+
+  Future<void> _createVorynId() async {
+    final normalized = _normalizedId;
+    if (_state != 'available') return;
+    setState(() {
+      _creating = true;
+      _serviceError = null;
+    });
+    final error = await _profileService.claimVorynId(normalized);
+    if (!mounted) return;
+    if (error != null) {
+      setState(() {
+        _creating = false;
+        _state = 'error';
+        _serviceError = error;
+      });
+      return;
+    }
+    onboardingData.vorynId = normalized;
+    context.go('/connect');
+  }
+
+  String get _normalizedId =>
+      _username.text.trim().replaceFirst('@', '').toLowerCase();
+
+  String? _validationError(String normalized) {
+    if (normalized.length < 3) return 'Use at least 3 characters';
+    if (normalized.length > 24) return 'Use 24 characters or fewer';
+    if (!RegExp(r'^[a-z0-9_]+$').hasMatch(normalized)) {
+      return 'Use letters, numbers and underscores only';
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
     final spacing = context.vorynSpacing;
     final colors = context.vorynColors;
-    final normalized = _username.text.replaceFirst('@', '').toLowerCase();
+    final normalized = _normalizedId;
     final available = _state == 'available' && !_checking;
     final message = switch (_state) {
       'available' => '@$normalized is available',
-      'taken' => 'This VoRyn ID is already taken',
-      'invalid' =>
-        normalized.length < 3
-            ? 'Use at least 3 characters'
-            : normalized.length > 24
-            ? 'Use 24 characters or fewer'
-            : 'Use letters, numbers and underscores only',
-      _ => 'Choose a unique VoRyn ID.',
+      'taken' => 'This Voryn ID is already taken',
+      'invalid' => _validationError(normalized) ?? 'Enter a valid Voryn ID.',
+      'error' => _serviceError ?? 'Could not check this Voryn ID.',
+      _ => 'Enter an ID, then check whether it is available.',
     };
     final messageColor = _state == 'available'
         ? colors.success
@@ -451,16 +496,17 @@ class _CreateVorynIdScreenState extends State<CreateVorynIdScreen> {
         : colors.danger;
     return OnboardingShell(
       step: 3,
+      dismissKeyboardOnTap: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Create your VoRyn ID',
+            'Create your Voryn ID',
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           SizedBox(height: spacing.sm),
           Text(
-            'This is how people can find and call you on VoRyn.',
+            'This is how people can find and call you on Voryn.',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           SizedBox(height: spacing.xl),
@@ -473,13 +519,22 @@ class _CreateVorynIdScreenState extends State<CreateVorynIdScreen> {
           ),
           SizedBox(height: spacing.xl),
           VorynTextInput(
-            label: 'VoRyn ID',
+            label: 'Voryn ID',
             controller: _username,
             hintText: 'vikash',
             prefixIcon: Icons.alternate_email_rounded,
             isLoading: _checking,
-            textInputAction: TextInputAction.done,
-            onChanged: _check,
+            enabled: !_creating,
+            textInputAction: TextInputAction.search,
+            onChanged: _handleChanged,
+            onSubmitted: (_) => _checkAvailability(),
+          ),
+          SizedBox(height: spacing.md),
+          VorynButton.secondary(
+            label: 'Check availability',
+            leadingIcon: Icons.search_rounded,
+            isLoading: _checking,
+            onPressed: _checking || _creating ? null : _checkAvailability,
           ),
           SizedBox(height: spacing.sm),
           AnimatedSwitcher(
@@ -526,13 +581,9 @@ class _CreateVorynIdScreenState extends State<CreateVorynIdScreen> {
           ),
           SizedBox(height: spacing.xxl),
           VorynButton.primary(
-            label: 'Create VoRyn ID',
-            onPressed: available
-                ? () {
-                    onboardingData.vorynId = normalized;
-                    context.go('/connect');
-                  }
-                : null,
+            label: 'Create Voryn ID',
+            isLoading: _creating,
+            onPressed: available && !_creating ? _createVorynId : null,
           ),
         ],
       ),

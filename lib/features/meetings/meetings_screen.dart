@@ -69,7 +69,7 @@ class MeetingsScreen extends StatelessWidget {
           children: [
             VorynGlobalHeader(
               title: 'Meetings',
-              subtitle: 'Meet and collaborate on VoRyn',
+              subtitle: 'Meet and collaborate on Voryn',
             ),
             SizedBox(height: s.lg),
             Row(
@@ -92,7 +92,7 @@ class MeetingsScreen extends StatelessWidget {
                   child: _ActionCard(
                     icon: Icons.login_rounded,
                     title: 'Join meeting',
-                    detail: 'Enter a VoRyn meeting link or code',
+                    detail: 'Enter a Voryn meeting link or code',
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -231,7 +231,7 @@ class _NewMeetingState extends State<NewMeetingScreen> {
       padding: EdgeInsets.all(context.vorynSpacing.screen),
       children: [
         Text(
-          'Create a VoRyn meeting',
+          'Create a Voryn meeting',
           style: Theme.of(context).textTheme.headlineMedium,
         ),
         const SizedBox(height: 8),
@@ -467,7 +467,7 @@ class _JoinState extends State<JoinMeetingScreen> {
       children: [
         const SizedBox(height: 20),
         Text(
-          'Join a VoRyn meeting',
+          'Join a Voryn meeting',
           style: Theme.of(x).textTheme.headlineMedium,
         ),
         const SizedBox(height: 8),
@@ -494,7 +494,7 @@ class _JoinState extends State<JoinMeetingScreen> {
       r'^(?:voryn\.app/j/)?[a-z0-9]{3}-[a-z0-9]{3}-[a-z0-9]{3}$',
     ).hasMatch(v);
     if (!ok) {
-          setState(() => error = 'Enter a valid VoRyn meeting link or code');
+      setState(() => error = 'Enter a valid Voryn meeting link or code');
       return;
     }
     final code = v.split('/').last;
@@ -502,7 +502,7 @@ class _JoinState extends State<JoinMeetingScreen> {
         mockMeetings.where((x) => x.joinCode == code).firstOrNull ??
         const MockMeeting(
           id: 'generic',
-          title: 'VoRyn Meeting',
+          title: 'Voryn Meeting',
           when: 'Today',
           time: 'Now',
           participants: 3,

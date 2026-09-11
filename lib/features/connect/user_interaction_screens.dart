@@ -84,7 +84,7 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
               VorynButton.secondary(
                 label: 'Unblock',
                 onPressed: () {
-                  setState(() => mockBlockedIds.remove(user.id));
+                  setState(() => setMockBlocked(user, false));
                   _feedback('User unblocked');
                 },
               ),
@@ -321,7 +321,7 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
         ),
         TextButton(
           onPressed: () {
-            mockBlockedIds.add(user.id);
+            setMockBlocked(user, true);
             Navigator.pop(dialogContext);
             setState(() {});
             _feedback('User blocked');

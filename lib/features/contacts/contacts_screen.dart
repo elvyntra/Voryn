@@ -8,7 +8,9 @@ import '../../shared/widgets/voryn_presence.dart';
 import '../../shared/widgets/voryn_text_input.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
+import '../connect/voryn_discovery_service.dart';
 import '../v2/v2_shared.dart';
+import 'voryn_contact_service.dart';
 
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -21,6 +23,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
   final _search = TextEditingController();
   final _scroll = ScrollController();
   bool _searching = false;
+  bool _syncing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStoredContacts();
+  }
 
   @override
   void dispose() {
@@ -66,7 +75,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
             children: [
               VorynGlobalHeader(
                 title: 'Contacts',
-                subtitle: 'Your people on VoRyn',
+                subtitle: 'Your people on Voryn',
               ),
               Row(
                 children: [
@@ -79,6 +88,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     tooltip: 'Search contacts',
                     onPressed: () => setState(() => _searching = !_searching),
                     icon: const Icon(Icons.search_rounded),
+                  ),
+                  IconButton(
+                    tooltip: 'Refresh contacts',
+                    onPressed: _syncing ? null : _syncContacts,
+                    icon: _syncing
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.sync_rounded),
                   ),
                 ],
               ),
@@ -94,14 +113,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 ),
               ],
               SizedBox(height: spacing.lg),
-              VorynSurface(
-                child: _MyProfileCard(
-                  onTap: () => _feedback(
-                    'Profile will be available in a later UI phase.',
-                  ),
-                ),
-              ),
-              SizedBox(height: spacing.xl),
               Text('Favorites', style: Theme.of(context).textTheme.labelLarge),
               SizedBox(height: spacing.sm),
               if (favorites.isEmpty)
@@ -186,46 +197,54 @@ class _ContactsScreenState extends State<ContactsScreen> {
     setState(() {});
   }
 
-  void _feedback(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-}
-
-class _MyProfileCard extends StatelessWidget {
-  const _MyProfileCard({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: const Row(
-      children: [
-        VorynAvatar(
-          initials: 'VM',
-          size: VorynAvatarSize.medium,
-          presenceStatus: VorynPresenceStatus.online,
-        ),
-        SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('My profile'),
-              SizedBox(height: 4),
-              Text('Vikash Mishra'),
-              Text('@vikash'),
-              VorynPresenceIndicator(
-                status: VorynPresenceStatus.online,
-                label: 'Online',
-              ),
-            ],
+  Future<void> _syncContacts() async {
+    setState(() => _syncing = true);
+    final result = await const VorynContactService().syncDeviceContacts();
+    if (!mounted) return;
+    setState(() {
+      _syncing = false;
+      if (result.isSuccess) mergeSyncedContacts(result.contacts);
+    });
+    if (result.permissionDenied) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Contacts permission needed'),
+          content: const Text(
+            'Allow contact access in system settings to find people you already know. Voryn remains usable without it.',
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Not now'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                const VorynContactService().openContactSettings();
+              },
+              child: const Text('Open settings'),
+            ),
+          ],
         ),
-        Icon(Icons.chevron_right_rounded),
-      ],
-    ),
-  );
+      );
+      return;
+    }
+    final message =
+        result.error ??
+        '${result.contacts.length} Voryn contact${result.contacts.length == 1 ? '' : 's'} synced';
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> _loadStoredContacts() async {
+    final contacts = await const VorynContactService().loadContacts();
+    if (!mounted || contacts.isEmpty) return;
+    setState(() => mergeSyncedContacts(contacts));
+  }
 }
 
 class _FavoriteContact extends StatelessWidget {
@@ -383,12 +402,16 @@ class AddContactScreen extends StatefulWidget {
 
 class _AddContactScreenState extends State<AddContactScreen> {
   final _query = TextEditingController();
+  final _queryFocus = FocusNode();
   VorynMockUser? _result;
   bool _searched = false;
+  bool _searching = false;
+  _SearchType _searchType = _SearchType.vorynId;
 
   @override
   void dispose() {
     _query.dispose();
+    _queryFocus.dispose();
     super.dispose();
   }
 
@@ -408,26 +431,61 @@ class _AddContactScreenState extends State<AddContactScreen> {
           ),
           children: [
             Text(
-              'Find someone on VoRyn',
+              'Find someone on Voryn',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             SizedBox(height: spacing.xs),
             Text(
-              'Search using their VoRyn ID, phone number, or email.',
+              'Search using their Voryn ID or phone number.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             SizedBox(height: spacing.lg),
+            SegmentedButton<_SearchType>(
+              segments: const [
+                ButtonSegment(
+                  value: _SearchType.vorynId,
+                  label: Text('Voryn ID'),
+                ),
+                ButtonSegment(value: _SearchType.phone, label: Text('Phone')),
+              ],
+              selected: {_searchType},
+              onSelectionChanged: _searching
+                  ? null
+                  : (selection) {
+                      _queryFocus.unfocus();
+                      setState(() {
+                        _searchType = selection.first;
+                        _query.clear();
+                        _result = null;
+                        _searched = false;
+                      });
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _queryFocus.requestFocus();
+                      });
+                    },
+            ),
+            SizedBox(height: spacing.md),
             VorynTextInput(
-              label: 'VoRyn ID, phone or email',
+              key: ValueKey(_searchType),
+              label: _searchType == _SearchType.vorynId
+                  ? 'Voryn ID'
+                  : 'Phone number',
               controller: _query,
-              keyboardType: TextInputType.emailAddress,
+              focusNode: _queryFocus,
+              keyboardType: _searchType == _SearchType.phone
+                  ? TextInputType.phone
+                  : TextInputType.text,
               onChanged: (_) => setState(() {
                 _result = null;
                 _searched = false;
               }),
             ),
             SizedBox(height: spacing.md),
-            VorynButton.primary(label: 'Search', onPressed: _search),
+            VorynButton.primary(
+              label: 'Search',
+              isLoading: _searching,
+              onPressed: _searching ? null : _search,
+            ),
             SizedBox(height: spacing.xl),
             if (_searched && _result == null) const _NoContactFound(),
             if (_result != null)
@@ -441,25 +499,33 @@ class _AddContactScreenState extends State<AddContactScreen> {
     );
   }
 
-  void _search() {
-    final query = _query.text.trim().toLowerCase();
-    final numeric = query.replaceAll(RegExp(r'[^0-9]'), '');
-    VorynMockUser? match;
-    for (final user in mockVorynUsers) {
-      final phone = user.phone.replaceAll(RegExp(r'[^0-9]'), '');
-      if (user.id.toLowerCase() == query ||
-          user.email.toLowerCase() == query ||
-          (numeric.isNotEmpty && phone.endsWith(numeric))) {
-        match = user;
-        break;
-      }
-    }
+  Future<void> _search() async {
+    final query = _query.text.trim();
+    if (query.isEmpty) return;
     setState(() {
       _searched = true;
-      _result = match;
+      _searching = true;
+      _result = null;
     });
+    try {
+      final result = _searchType == _SearchType.vorynId
+          ? await const VorynDiscoveryService().findByVorynId(query)
+          : await const VorynDiscoveryService().findByPhone(query);
+      if (!mounted) return;
+      setState(() {
+        _result = result == null ? null : VorynMockUser.fromDiscovery(result);
+        if (_result != null &&
+            !mockVorynUsers.any((user) => user.id == _result!.id)) {
+          mockVorynUsers.add(_result!);
+        }
+      });
+    } finally {
+      if (mounted) setState(() => _searching = false);
+    }
   }
 }
+
+enum _SearchType { vorynId, phone }
 
 class _AddContactResult extends StatefulWidget {
   const _AddContactResult({required this.user, required this.onSaved});
@@ -566,12 +632,12 @@ class _NoContactFound extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          'No VoRyn user found',
+          'No Voryn user found',
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 6),
         Text(
-          'Check the VoRyn ID, phone number, or email.',
+          'Check the Voryn ID, phone number, or email.',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium,
         ),
@@ -598,7 +664,7 @@ class _EmptyContacts extends StatelessWidget {
         Text('No contacts yet', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 6),
         Text(
-          'Find someone on VoRyn and save them to your contacts.',
+          'Find someone on Voryn and save them to your contacts.',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium,
         ),

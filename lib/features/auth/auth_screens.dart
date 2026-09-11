@@ -7,6 +7,7 @@ import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_text_input.dart';
+import 'voryn_auth_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -20,7 +21,12 @@ class _SplashScreenState extends State<SplashScreen> {
   void initState() {
     super.initState();
     Timer(const Duration(milliseconds: 900), () {
-      if (mounted) context.go('/welcome');
+      if (!mounted) return;
+      final auth = const VorynAuthService();
+      final user = auth.currentSession?.user;
+      context.go(
+        user == null ? '/welcome' : auth.routeAfterAuthentication(user),
+      );
     });
   }
 
@@ -59,7 +65,7 @@ class WelcomeScreen extends StatelessWidget {
           Center(child: VorynBrandMark(size: 76)),
           SizedBox(height: spacing.lg),
           Text(
-            'VoRyn',
+            'Voryn',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.displayLarge,
           ),
@@ -75,7 +81,14 @@ class WelcomeScreen extends StatelessWidget {
           VorynButton.secondary(
             label: 'Continue with Google',
             leadingIcon: Icons.g_mobiledata_rounded,
-            onPressed: () {},
+            onPressed: () async {
+              final result = await const VorynAuthService().signInWithGoogle();
+              if (context.mounted && result.error != null) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(result.error!)));
+              }
+            },
           ),
           SizedBox(height: spacing.md),
           VorynButton.primary(
@@ -90,7 +103,7 @@ class WelcomeScreen extends StatelessWidget {
           ),
           SizedBox(height: spacing.lg),
           Text(
-            'By continuing, you agree to VoRyn\'s Terms and Privacy Policy.',
+            'By continuing, you agree to Voryn\'s Terms and Privacy Policy.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.labelSmall,
           ),
@@ -108,6 +121,7 @@ class SignInScreen extends StatefulWidget {
 }
 
 class _SignInScreenState extends State<SignInScreen> {
+  final _auth = const VorynAuthService();
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _hidePassword = true;
@@ -132,8 +146,39 @@ class _SignInScreenState extends State<SignInScreen> {
     if (_emailError != null || _passwordError != null) return;
 
     setState(() => _loading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
-    if (mounted) context.go('/connect');
+    final result = await _auth.signIn(
+      email: _email.text.trim(),
+      password: _password.text,
+    );
+    if (!mounted) return;
+    if (!result.isSuccess) {
+      setState(() {
+        _loading = false;
+        _passwordError = result.error;
+      });
+      return;
+    }
+    final user = result.user;
+    if (user == null) {
+      setState(() {
+        _loading = false;
+        _passwordError = 'Sign in did not return a user. Please try again.';
+      });
+      return;
+    }
+    context.go(_auth.routeAfterAuthentication(user));
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() => _loading = true);
+    final result = await _auth.signInWithGoogle();
+    if (!mounted) return;
+    setState(() => _loading = false);
+    if (result.error != null) {
+      setState(() {
+        _passwordError = result.error;
+      });
+    }
   }
 
   @override
@@ -147,7 +192,7 @@ class _SignInScreenState extends State<SignInScreen> {
         children: [
           const AuthHeader(
             title: 'Welcome back',
-            subtitle: 'Sign in with your email to continue to VoRyn.',
+            subtitle: 'Sign in with your email to continue to Voryn.',
           ),
           SizedBox(height: spacing.xl),
           VorynTextInput(
@@ -200,11 +245,11 @@ class _SignInScreenState extends State<SignInScreen> {
           VorynButton.secondary(
             label: 'Continue with Google',
             leadingIcon: Icons.g_mobiledata_rounded,
-            onPressed: _loading ? null : () {},
+            onPressed: _loading ? null : _signInWithGoogle,
           ),
           const Spacer(),
           AuthSwitchLink(
-              prompt: 'New to VoRyn?',
+            prompt: 'New to Voryn?',
             action: 'Create account',
             onPressed: _loading ? null : () => context.go('/sign-up'),
           ),
@@ -222,6 +267,7 @@ class SignUpScreen extends StatefulWidget {
 }
 
 class _SignUpScreenState extends State<SignUpScreen> {
+  final _auth = const VorynAuthService();
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirmPassword = TextEditingController();
@@ -230,12 +276,18 @@ class _SignUpScreenState extends State<SignUpScreen> {
   String? _emailError;
   String? _passwordError;
   String? _confirmError;
+  String? _confirmationEmail;
+  final _otp = TextEditingController();
+  String? _otpError;
+  bool _verifyingOtp = false;
+  bool _resendingOtp = false;
 
   @override
   void dispose() {
     _email.dispose();
     _password.dispose();
     _confirmPassword.dispose();
+    _otp.dispose();
     super.dispose();
   }
 
@@ -256,13 +308,165 @@ class _SignUpScreenState extends State<SignUpScreen> {
     }
 
     setState(() => _loading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
-    if (mounted) context.go('/onboarding/profile');
+    final result = await _auth.signUp(
+      email: _email.text.trim(),
+      password: _password.text,
+    );
+    if (!mounted) return;
+    if (!result.isSuccess) {
+      setState(() {
+        _loading = false;
+        _passwordError = result.error;
+      });
+      return;
+    }
+    if (result.accountAlreadyExists) {
+      setState(() => _loading = false);
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Account already exists'),
+          content: const Text(
+            'This email is already connected to Voryn. Sign in with Google, or use Forgot password to create a password for email sign-in.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) context.go('/welcome');
+      return;
+    }
+    if (result.emailConfirmationRequired) {
+      setState(() {
+        _loading = false;
+        _confirmationEmail = _email.text.trim();
+      });
+      return;
+    }
+    final user = result.user;
+    if (user == null) {
+      setState(() {
+        _loading = false;
+        _passwordError = 'Account creation did not return a user.';
+      });
+      return;
+    }
+    context.go('/onboarding/profile');
+  }
+
+  Future<void> _verifyEmail() async {
+    if (_otp.text.trim().length != 6) {
+      setState(() => _otpError = 'Enter the 6-digit email code.');
+      return;
+    }
+    setState(() {
+      _verifyingOtp = true;
+      _otpError = null;
+    });
+    final result = await _auth.verifyEmailOtp(
+      email: _confirmationEmail!,
+      token: _otp.text.trim(),
+    );
+    if (!mounted) return;
+    if (!result.isSuccess || result.user == null) {
+      setState(() {
+        _verifyingOtp = false;
+        _otpError = result.error ?? 'Could not verify this email code.';
+      });
+      return;
+    }
+    context.go('/onboarding/profile');
+  }
+
+  Future<void> _resendEmailOtp() async {
+    setState(() {
+      _resendingOtp = true;
+      _otpError = null;
+    });
+    final result = await _auth.resendSignupOtp(_confirmationEmail!);
+    if (!mounted) return;
+    setState(() => _resendingOtp = false);
+    if (result.error != null) {
+      setState(() => _otpError = result.error);
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('A new email code was sent.')));
+  }
+
+  Future<void> _signUpWithGoogle() async {
+    setState(() => _loading = true);
+    final result = await _auth.signInWithGoogle();
+    if (!mounted) return;
+    setState(() => _loading = false);
+    if (result.error != null) {
+      setState(() {
+        _passwordError = result.error;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final spacing = context.vorynSpacing;
+
+    if (_confirmationEmail != null) {
+      return AuthScaffold(
+        showBack: true,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Spacer(),
+            const Icon(Icons.password_rounded, size: 56),
+            SizedBox(height: spacing.lg),
+            Text(
+              'Enter your email code',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            SizedBox(height: spacing.sm),
+            Text(
+              'Enter the 6-digit code sent to $_confirmationEmail.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            SizedBox(height: spacing.lg),
+            VorynTextInput(
+              label: 'Email code',
+              controller: _otp,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+              enabled: !_verifyingOtp && !_resendingOtp,
+              errorText: _otpError,
+              onChanged: (_) => setState(() => _otpError = null),
+              onSubmitted: (_) => _verifyEmail(),
+            ),
+            SizedBox(height: spacing.md),
+            VorynButton.primary(
+              label: 'Verify email',
+              isLoading: _verifyingOtp,
+              onPressed: _verifyingOtp || _resendingOtp ? null : _verifyEmail,
+            ),
+            TextButton(
+              onPressed: _verifyingOtp || _resendingOtp
+                  ? null
+                  : _resendEmailOtp,
+              child: Text(_resendingOtp ? 'Sending...' : 'Resend code'),
+            ),
+            const Spacer(),
+            VorynButton.primary(
+              label: 'Back to sign in',
+              onPressed: () => context.go('/sign-in'),
+            ),
+          ],
+        ),
+      );
+    }
 
     return AuthScaffold(
       showBack: true,
@@ -329,7 +533,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
           VorynButton.secondary(
             label: 'Continue with Google',
             leadingIcon: Icons.g_mobiledata_rounded,
-            onPressed: _loading ? null : () {},
+            onPressed: _loading ? null : _signUpWithGoogle,
           ),
           const Spacer(),
           AuthSwitchLink(
@@ -350,7 +554,114 @@ class ForgotPasswordScreen extends StatefulWidget {
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
+class ResetPasswordScreen extends StatefulWidget {
+  const ResetPasswordScreen({super.key});
+
+  @override
+  State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
+}
+
+class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
+  final _auth = const VorynAuthService();
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
+  bool _hidePassword = true;
+  bool _loading = false;
+  String? _passwordError;
+  String? _confirmationError;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _passwordError = _password.text.length >= 6
+          ? null
+          : 'Use 6 or more characters.';
+      _confirmationError = _confirmation.text == _password.text
+          ? null
+          : 'Passwords do not match.';
+    });
+    if (_passwordError != null || _confirmationError != null) return;
+
+    setState(() => _loading = true);
+    final result = await _auth.updatePassword(_password.text);
+    if (!mounted) return;
+    if (!result.isSuccess) {
+      setState(() {
+        _loading = false;
+        _passwordError = result.error;
+      });
+      return;
+    }
+    final user = result.user;
+    context.go(
+      user == null ? '/sign-in' : _auth.routeAfterAuthentication(user),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final spacing = context.vorynSpacing;
+    return AuthScaffold(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const AuthHeader(
+            title: 'Create new password',
+            subtitle: 'Choose a password you can use to sign in with email.',
+          ),
+          SizedBox(height: spacing.xl),
+          VorynTextInput(
+            label: 'New password',
+            controller: _password,
+            prefixIcon: Icons.lock_outline_rounded,
+            obscureText: _hidePassword,
+            textInputAction: TextInputAction.next,
+            enabled: !_loading,
+            errorText: _passwordError,
+            onChanged: (_) => setState(() => _passwordError = null),
+            suffixIcon: IconButton(
+              onPressed: _loading
+                  ? null
+                  : () => setState(() => _hidePassword = !_hidePassword),
+              icon: Icon(
+                _hidePassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+              ),
+            ),
+          ),
+          SizedBox(height: spacing.md),
+          VorynTextInput(
+            label: 'Confirm new password',
+            controller: _confirmation,
+            prefixIcon: Icons.verified_user_outlined,
+            obscureText: _hidePassword,
+            textInputAction: TextInputAction.done,
+            enabled: !_loading,
+            errorText: _confirmationError,
+            onChanged: (_) => setState(() => _confirmationError = null),
+            onSubmitted: (_) => _submit(),
+          ),
+          SizedBox(height: spacing.lg),
+          VorynButton.primary(
+            label: 'Save password',
+            isLoading: _loading,
+            onPressed: _loading ? null : _submit,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final _auth = const VorynAuthService();
   final _email = TextEditingController();
   bool _loading = false;
   bool _sent = false;
@@ -369,11 +680,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     if (_emailError != null) return;
 
     setState(() => _loading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
+    final result = await _auth.sendPasswordReset(_email.text.trim());
     if (mounted) {
       setState(() {
         _loading = false;
-        _sent = true;
+        _emailError = result.error;
+        _sent = result.isSuccess;
       });
     }
   }
@@ -586,7 +898,7 @@ class VorynBrandMark extends StatelessWidget {
         width: size,
         height: size,
         fit: BoxFit.cover,
-        semanticLabel: 'VoRyn logo',
+        semanticLabel: 'Voryn logo',
       ),
     );
   }

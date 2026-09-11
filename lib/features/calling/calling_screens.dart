@@ -141,7 +141,7 @@ class _AudioState extends State<AudioCallScreen> {
                     padding: const EdgeInsets.all(18),
                     child: Text(
                       state == MockCallState.offline
-                          ? "They aren't available for a VoRyn call right now."
+                          ? "They aren't available for a Voryn call right now."
                           : "They're already on another call.",
                       textAlign: TextAlign.center,
                     ),
@@ -522,7 +522,7 @@ class _IncomingState extends State<IncomingCallScreen> {
         children: [
           const Padding(
             padding: EdgeInsets.all(24),
-            child: Text('VoRyn', style: TextStyle(letterSpacing: 3)),
+            child: Text('Voryn', style: TextStyle(letterSpacing: 3)),
           ),
           Expanded(
             child: Center(

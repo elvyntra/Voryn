@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/theme/voryn_theme.dart';
+import '../../core/theme/voryn_theme_controller.dart';
 import '../../shared/widgets/voryn_avatar.dart';
 import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
@@ -70,7 +71,7 @@ class _ProfileState extends State<ProfileScreen> {
           const VorynSurface(
             child: Column(
               children: [
-                _Info(label: 'VoRyn ID', value: '@vikash'),
+                _Info(label: 'Voryn ID', value: '@vikash'),
                 _Info(label: 'Phone', value: '+91 98765 43210 · Verified'),
                 _Info(label: 'Email', value: 'vikash@example.com · Verified'),
               ],
@@ -122,7 +123,7 @@ class _ProfileState extends State<ProfileScreen> {
   void _logout(BuildContext context) => showDialog<void>(
     context: context,
     builder: (_) => AlertDialog(
-      title: const Text('Log out of VoRyn?'),
+      title: const Text('Log out of Voryn?'),
       content: const Text("You'll need to sign in again to continue."),
       actions: [
         TextButton(
@@ -179,7 +180,7 @@ class _EditProfileState extends State<EditProfileScreen> {
         const SizedBox(height: 22),
         VorynTextInput(label: 'Full name', controller: controller),
         const SizedBox(height: 16),
-        const VorynTextInput(label: 'VoRyn ID', hintText: '@vikash_new'),
+        const VorynTextInput(label: 'Voryn ID', hintText: '@vikash_new'),
         const SizedBox(height: 16),
         const ListTile(
           title: Text('Phone'),
@@ -221,7 +222,7 @@ class ShareProfileScreen extends StatelessWidget {
             Clipboard.setData(const ClipboardData(text: '@vikash'));
             ScaffoldMessenger.of(
               context,
-            ).showSnackBar(const SnackBar(content: Text('VoRyn ID copied')));
+            ).showSnackBar(const SnackBar(content: Text('Voryn ID copied')));
           },
         ),
         const SizedBox(height: 10),
@@ -251,9 +252,10 @@ class _SettingsState extends State<SettingsDetailScreen> {
   final values = <String, bool>{};
   @override
   Widget build(BuildContext context) {
+    if (widget.title == 'Appearance') return const AppearanceScreen();
     final rows = switch (widget.title) {
       'Privacy' => [
-        'Find me by VoRyn ID',
+        'Find me by Voryn ID',
         'Find me by phone number',
         'Find me by email',
         'Show when I\'m online',
@@ -278,7 +280,7 @@ class _SettingsState extends State<SettingsDetailScreen> {
         'Meeting help',
         'Privacy & safety',
         'Report a problem',
-          'About VoRyn',
+        'About Voryn',
       ],
     };
     return Scaffold(
@@ -306,6 +308,58 @@ class _SettingsState extends State<SettingsDetailScreen> {
   }
 }
 
+class AppearanceScreen extends StatelessWidget {
+  const AppearanceScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final controller = VorynThemeController.current;
+    final selected = controller?.mode ?? ThemeMode.system;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Appearance')),
+      body: ListView(
+        padding: EdgeInsets.all(context.vorynSpacing.screen),
+        children: [
+          Text(
+            'Choose how Voryn looks',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 14),
+          for (final option in [
+            ThemeMode.system,
+            ThemeMode.light,
+            ThemeMode.dark,
+          ])
+            VorynCard(
+              onPressed: controller == null
+                  ? null
+                  : () => controller.setMode(option),
+              child: Row(
+                children: [
+                  Icon(
+                    selected == option
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                    color: selected == option
+                        ? context.vorynColors.accent
+                        : context.vorynColors.iconMuted,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(_themeLabel(option)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _themeLabel(ThemeMode mode) => switch (mode) {
+    ThemeMode.system => 'System',
+    ThemeMode.light => 'Light',
+    ThemeMode.dark => 'Dark',
+  };
+}
+
 class PermissionsScreen extends StatefulWidget {
   const PermissionsScreen({super.key});
   @override
@@ -325,11 +379,11 @@ class _PermissionsState extends State<PermissionsScreen> {
       padding: EdgeInsets.all(context.vorynSpacing.screen),
       children: [
         Text(
-          'Allow VoRyn to make calls',
+          'Allow Voryn to make calls',
           style: Theme.of(context).textTheme.headlineMedium,
         ),
         const SizedBox(height: 8),
-        const Text('VoRyn needs a few permissions for calling features.'),
+        const Text('Voryn needs a few permissions for calling features.'),
         for (final entry in statuses.entries)
           VorynCard(
             onPressed: () => setState(
