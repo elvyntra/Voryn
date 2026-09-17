@@ -2,7 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/notifications/lock_screen_service.dart';
+import '../../core/notifications/voryn_firebase_messaging.dart';
+import '../../core/permissions/voryn_startup_permissions.dart';
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
@@ -20,14 +24,31 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(milliseconds: 900), () {
-      if (!mounted) return;
-      final auth = const VorynAuthService();
-      final user = auth.currentSession?.user;
-      context.go(
-        user == null ? '/welcome' : auth.routeAfterAuthentication(user),
-      );
-    });
+    _continueFromSplash();
+  }
+
+  Future<void> _continueFromSplash() async {
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    await VorynStartupPermissions.requestAfterSplash();
+    unawaited(VorynFirebaseMessaging.registerTokenAfterSplash());
+    final preferences = await SharedPreferences.getInstance();
+    final landingCompleted =
+        preferences.getBool('voryn.landing.completed') ?? false;
+    if (!mounted) return;
+    final isLocked = await LockScreenService.isKeyguardLocked();
+    if (!mounted) return;
+    if (isLocked) {
+      debugPrint('[BOOT] Splash prevented navigation: keyguard is locked');
+      await LockScreenService.moveCallTaskBehindKeyguard();
+      return;
+    }
+    final auth = const VorynAuthService();
+    final user = auth.currentSession?.user;
+    if (!landingCompleted && user == null) {
+      context.go('/landing');
+      return;
+    }
+    context.go(user == null ? '/welcome' : auth.routeAfterAuthentication(user));
   }
 
   @override
@@ -82,11 +103,17 @@ class WelcomeScreen extends StatelessWidget {
             label: 'Continue with Google',
             leadingIcon: Icons.g_mobiledata_rounded,
             onPressed: () async {
-              final result = await const VorynAuthService().signInWithGoogle();
-              if (context.mounted && result.error != null) {
+              const auth = VorynAuthService();
+              final result = await auth.signInWithGoogle();
+              if (!context.mounted) return;
+              if (result.error != null) {
                 ScaffoldMessenger.of(
                   context,
                 ).showSnackBar(SnackBar(content: Text(result.error!)));
+                return;
+              }
+              if (result.user != null) {
+                context.go(auth.routeAfterAuthentication(result.user!));
               }
             },
           ),
@@ -98,6 +125,21 @@ class WelcomeScreen extends StatelessWidget {
           ),
           SizedBox(height: spacing.sm),
           TextButton(
+            style: ButtonStyle(
+              foregroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.hovered)
+                    ? colors.accentViolet
+                    : colors.accent,
+              ),
+              overlayColor: WidgetStatePropertyAll(colors.accentSoft),
+              textStyle: WidgetStateProperty.resolveWith(
+                (states) => Theme.of(context).textTheme.labelLarge?.copyWith(
+                  decoration: states.contains(WidgetState.hovered)
+                      ? TextDecoration.underline
+                      : TextDecoration.none,
+                ),
+              ),
+            ),
             onPressed: () => context.go('/sign-up'),
             child: const Text('Create an account'),
           ),
@@ -108,6 +150,70 @@ class WelcomeScreen extends StatelessWidget {
             style: Theme.of(context).textTheme.labelSmall,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class OAuthCallbackScreen extends StatefulWidget {
+  const OAuthCallbackScreen({super.key});
+
+  @override
+  State<OAuthCallbackScreen> createState() => _OAuthCallbackScreenState();
+}
+
+class _OAuthCallbackScreenState extends State<OAuthCallbackScreen> {
+  final _auth = const VorynAuthService();
+
+  @override
+  void initState() {
+    super.initState();
+    _finishSignIn();
+  }
+
+  Future<void> _finishSignIn() async {
+    // Supabase processes the OAuth deep link asynchronously after Android
+    // delivers it to the app. Keep this route alive until that session arrives.
+    for (var attempt = 0; attempt < 16; attempt++) {
+      final user = _auth.currentSession?.user;
+      if (user != null) {
+        if (mounted) context.go(_auth.routeAfterAuthentication(user));
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+
+    if (mounted) context.go('/sign-in');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.vorynColors;
+    final spacing = context.vorynSpacing;
+
+    return AuthScaffold(
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            VorynBrandMark(size: 72),
+            SizedBox(height: spacing.lg),
+            const CircularProgressIndicator(),
+            SizedBox(height: spacing.md),
+            Text(
+              'Signing you in',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            SizedBox(height: spacing.xs),
+            Text(
+              'Finishing your secure Google sign in.',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -178,6 +284,10 @@ class _SignInScreenState extends State<SignInScreen> {
       setState(() {
         _passwordError = result.error;
       });
+      return;
+    }
+    if (result.user != null) {
+      context.go(_auth.routeAfterAuthentication(result.user!));
     }
   }
 
@@ -408,6 +518,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
       setState(() {
         _passwordError = result.error;
       });
+      return;
+    }
+    if (result.user != null) {
+      context.go(_auth.routeAfterAuthentication(result.user!));
     }
   }
 

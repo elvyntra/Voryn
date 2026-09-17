@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "716355656641",
+    "project_id": "voryn-24863",
+    "storage_bucket": "voryn-24863.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:716355656641:android:b97ddce72c45c6bcb66d40",
+        "android_client_info": {
+          "package_name": "com.voryn.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "716355656641-2tt9oimaml3jtdb9veuusrqlhoq0lsq9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.voryn.app",
+            "certificate_hash": "0eafd8e62a596bfb24e9ff3a606c06e410039090"
+          }
+        },
+        {
+          "client_id": "716355656641-ftpe959l3lgrr6ic13bkiq768ri4p0mt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDSWwIq_zjg7u6688ajEpzQBb00Qx0nlqE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "716355656641-ftpe959l3lgrr6ic13bkiq768ri4p0mt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

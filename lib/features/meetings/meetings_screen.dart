@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_avatar.dart';
 import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_text_input.dart';
-import '../calling/calling_screens.dart';
 import '../v2/v2_shared.dart';
 
 enum MockMeetingStatus { ready, ended }
@@ -62,51 +62,74 @@ class MeetingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.vorynSpacing;
+    final readyMeeting = mockMeetings
+        .where((meeting) => meeting.status == MockMeetingStatus.ready)
+        .firstOrNull;
     return Scaffold(
       body: SafeArea(
         child: ListView(
-          padding: EdgeInsets.all(s.screen),
+          padding: EdgeInsets.fromLTRB(s.screen, s.md, s.screen, s.screen),
           children: [
-            VorynGlobalHeader(
-              title: 'Meetings',
-              subtitle: 'Meet and collaborate on Voryn',
+            const VorynGlobalHeader(title: 'Meetings'),
+            SizedBox(height: s.xl),
+            Text(
+              'Meet together,\nwithout the friction.',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(height: 1.08),
+            ),
+            SizedBox(height: s.sm),
+            Text(
+              'Start a room for your people or join one in a moment.',
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
             SizedBox(height: s.lg),
+            _MeetingActionPanel(
+              onNewMeeting: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const NewMeetingScreen()),
+              ),
+              onJoinMeeting: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const JoinMeetingScreen()),
+              ),
+            ),
+            if (readyMeeting != null) ...[
+              SizedBox(height: s.xl),
+              Text(
+                'Ready to join',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              SizedBox(height: s.sm),
+              _ReadyMeetingCard(
+                meeting: readyMeeting,
+                onJoin: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PreJoinScreen(
+                      meeting: readyMeeting,
+                      host: false,
+                      mic: true,
+                      camera: false,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            SizedBox(height: s.xl),
             Row(
               children: [
                 Expanded(
-                  child: _ActionCard(
-                    icon: Icons.video_call_outlined,
-                    title: 'New meeting',
-                    detail: 'Create a room and invite people',
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const NewMeetingScreen(),
-                      ),
-                    ),
+                  child: Text(
+                    'Recent meetings',
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
-                SizedBox(width: s.sm),
-                Expanded(
-                  child: _ActionCard(
-                    icon: Icons.login_rounded,
-                    title: 'Join meeting',
-                    detail: 'Enter a Voryn meeting link or code',
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const JoinMeetingScreen(),
-                      ),
-                    ),
-                  ),
+                Icon(
+                  Icons.history_rounded,
+                  color: context.vorynColors.iconMuted,
                 ),
               ],
-            ),
-            SizedBox(height: s.xl),
-            Text(
-              'Recent meetings',
-              style: Theme.of(context).textTheme.titleLarge,
             ),
             SizedBox(height: s.sm),
             ...mockMeetings.map(
@@ -130,30 +153,156 @@ class MeetingsScreen extends StatelessWidget {
   }
 }
 
-class _ActionCard extends StatelessWidget {
-  const _ActionCard({
+class _MeetingActionPanel extends StatelessWidget {
+  const _MeetingActionPanel({
+    required this.onNewMeeting,
+    required this.onJoinMeeting,
+  });
+
+  final VoidCallback onNewMeeting;
+  final VoidCallback onJoinMeeting;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.vorynColors;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(context.vorynRadii.lg),
+        border: Border.all(color: colors.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _MeetingAction(
+              icon: Icons.add_rounded,
+              label: 'New meeting',
+              detail: 'Create a room',
+              primary: true,
+              onTap: onNewMeeting,
+            ),
+          ),
+          Container(width: 1, height: 86, color: colors.border),
+          Expanded(
+            child: _MeetingAction(
+              icon: Icons.keyboard_arrow_right_rounded,
+              label: 'Join',
+              detail: 'Use a code',
+              onTap: onJoinMeeting,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeetingAction extends StatelessWidget {
+  const _MeetingAction({
     required this.icon,
-    required this.title,
+    required this.label,
     required this.detail,
     required this.onTap,
+    this.primary = false,
   });
+
   final IconData icon;
-  final String title, detail;
+  final String label;
+  final String detail;
   final VoidCallback onTap;
+  final bool primary;
+
   @override
-  Widget build(BuildContext c) => VorynCard(
-    onPressed: onTap,
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: c.vorynColors.accent, size: 26),
-        const SizedBox(height: 16),
-        Text(title, style: Theme.of(c).textTheme.titleMedium),
-        const SizedBox(height: 5),
-        Text(detail, style: Theme.of(c).textTheme.bodySmall),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final colors = context.vorynColors;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(context.vorynRadii.lg),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 17),
+        child: Row(
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: primary ? colors.accent : colors.surfaceRaised,
+                shape: BoxShape.circle,
+              ),
+              child: SizedBox(
+                width: 36,
+                height: 36,
+                child: Icon(icon, size: 21, color: colors.textPrimary),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 3),
+                  Text(detail, style: Theme.of(context).textTheme.labelSmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadyMeetingCard extends StatelessWidget {
+  const _ReadyMeetingCard({required this.meeting, required this.onJoin});
+
+  final MockMeeting meeting;
+  final VoidCallback onJoin;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.vorynColors;
+    return VorynCard(
+      onPressed: onJoin,
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: colors.accentSoft,
+              borderRadius: BorderRadius.circular(context.vorynRadii.md),
+            ),
+            child: SizedBox(
+              height: 50,
+              width: 50,
+              child: Icon(
+                Icons.groups_2_outlined,
+                color: colors.accent,
+                size: 26,
+              ),
+            ),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  meeting.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${meeting.participants} people waiting',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.arrow_forward_rounded, color: colors.accent),
+        ],
+      ),
+    );
+  }
 }
 
 class _MeetingRow extends StatelessWidget {
@@ -166,10 +315,25 @@ class _MeetingRow extends StatelessWidget {
     final ready = meeting.status == MockMeetingStatus.ready;
     return VorynCard(
       onPressed: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       child: Row(
         children: [
-          const VorynAvatar(initials: 'VM', size: VorynAvatarSize.medium),
-          const SizedBox(width: 12),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: ready ? colors.accentSoft : colors.surfaceRaised,
+              borderRadius: BorderRadius.circular(c.vorynRadii.md),
+            ),
+            child: SizedBox(
+              width: 46,
+              height: 46,
+              child: Icon(
+                ready ? Icons.videocam_rounded : Icons.history_rounded,
+                color: ready ? colors.accent : colors.iconMuted,
+                size: 22,
+              ),
+            ),
+          ),
+          const SizedBox(width: 13),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -182,7 +346,7 @@ class _MeetingRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  '${meeting.participants} participants${meeting.duration == null ? '' : ' · ${meeting.duration}'}',
+                  '${meeting.participants} people${meeting.duration == null ? '' : ' · ${meeting.duration}'}',
                   style: Theme.of(c).textTheme.bodySmall,
                 ),
               ],
@@ -610,16 +774,13 @@ class _PreJoinState extends State<PreJoinScreen> {
           const SizedBox(height: 24),
           VorynButton.primary(
             label: widget.host ? 'Start meeting' : 'Join meeting',
-            onPressed: () => Navigator.pushReplacement(
-              c,
-              MaterialPageRoute(
-                builder: (_) => MockMeetingRoomScreen(
-                  title: widget.meeting.title,
-                  participants: widget.meeting.participants,
-                  host: widget.host,
-                ),
-              ),
-            ),
+            onPressed: () {
+              Navigator.pop(c);
+              c.push(
+                '/group-call/${widget.meeting.id}',
+                extra: {'title': widget.meeting.title},
+              );
+            },
           ),
         ],
       ),

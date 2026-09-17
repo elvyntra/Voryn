@@ -44,3 +44,17 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Private local AI/project context
+/AI_BRAIN.md
+/AI_RULES.md
+/CODING_AGENT_MASTER_PROMPT.txt
+/RUNTIME_CONTEXT_LOG.md
+/SESSION_MEMORY.md
+/VORYN_BACKEND_SCHEMA.md
+/VORYN_PRD.md
+/VORYN_TRD.md
+/VORYN_V2_UI_REVISION.md
+# Supabase temp
+supabase/.temp/
+.temp/

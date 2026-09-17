@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
@@ -27,6 +29,29 @@ class VorynProfileService {
         .eq('uid', user.id)
         .maybeSingle();
     return row == null ? null : VorynProfile.fromMap(row);
+  }
+
+  Future<String?> uploadAvatar(Uint8List bytes) async {
+    final client = _client;
+    final user = client?.auth.currentUser;
+    if (client == null || user == null) return null;
+    final path = '${user.id}/profile.jpg';
+    await client.storage
+        .from('avatars')
+        .uploadBinary(
+          path,
+          bytes,
+          fileOptions: const FileOptions(
+            contentType: 'image/jpeg',
+            upsert: true,
+          ),
+        );
+    final url = client.storage.from('avatars').getPublicUrl(path);
+    await client
+        .from('profiles')
+        .update({'avatar_url': url})
+        .eq('uid', user.id);
+    return url;
   }
 
   Future<VorynProfile?> upsertProfile({

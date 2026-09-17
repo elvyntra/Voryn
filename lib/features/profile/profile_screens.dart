@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/theme/voryn_theme.dart';
 import '../../core/theme/voryn_theme_controller.dart';
 import '../../shared/widgets/voryn_avatar.dart';
@@ -7,6 +8,7 @@ import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_text_input.dart';
 import '../v2/v2_shared.dart';
+import 'voryn_profile_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -152,10 +154,49 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileState extends State<EditProfileScreen> {
   late final controller = TextEditingController(text: widget.name);
+  final _picker = ImagePicker();
+  Uint8List? _avatarBytes;
+  bool _uploadingAvatar = false;
   @override
   void dispose() {
     controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickAvatar() async {
+    final image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 86,
+      maxWidth: 1200,
+    );
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    if (!mounted) return;
+    setState(() {
+      _avatarBytes = bytes;
+      _uploadingAvatar = true;
+    });
+    try {
+      final url = await const VorynProfileService().uploadAvatar(bytes);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            url == null
+                ? 'Sign in again before uploading a profile photo.'
+                : 'Profile photo updated.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not upload profile photo.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
   }
 
   @override
@@ -166,14 +207,29 @@ class _EditProfileState extends State<EditProfileScreen> {
       children: [
         Center(
           child: GestureDetector(
-            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Profile photo options are mock-only.'),
-              ),
-            ),
-            child: const VorynAvatar(
-              initials: 'VM',
-              size: VorynAvatarSize.xlarge,
+            onTap: _uploadingAvatar ? null : _pickAvatar,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                VorynAvatar(
+                  initials: 'VM',
+                  size: VorynAvatarSize.xlarge,
+                  imageProvider: _avatarBytes == null
+                      ? null
+                      : MemoryImage(_avatarBytes!),
+                ),
+                if (_uploadingAvatar)
+                  const SizedBox.square(
+                    dimension: 30,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  const Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Icon(Icons.add_a_photo_outlined, size: 20),
+                  ),
+              ],
             ),
           ),
         ),

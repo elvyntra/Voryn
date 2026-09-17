@@ -1,10 +1,24 @@
+import 'dart:io' show Platform;
+
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
 
 const vorynOAuthRedirectUrl = 'io.supabase.voryn://login-callback/';
 const _backendUnavailableMessage =
-    'Voryn could not connect to authentication. Please try again.';
+    'Could not reach Voryn. Check your internet connection and try again.';
+
+String _friendlyAuthError(String message) {
+  final normalized = message.toLowerCase();
+  if (normalized.contains('socketexception') ||
+      normalized.contains('clientexception') ||
+      normalized.contains('failed host lookup') ||
+      normalized.contains('network')) {
+    return _backendUnavailableMessage;
+  }
+  return message;
+}
 
 class VorynAuthResult {
   const VorynAuthResult({
@@ -56,7 +70,7 @@ class VorynAuthService {
               'Incorrect email or password. If you joined with Google, continue with Google or use Forgot password to create a password.',
         );
       }
-      return VorynAuthResult(error: error.message);
+      return VorynAuthResult(error: _friendlyAuthError(error.message));
     } catch (_) {
       return const VorynAuthResult(error: _backendUnavailableMessage);
     }
@@ -87,7 +101,7 @@ class VorynAuthService {
       if (error.message.toLowerCase().contains('already registered')) {
         return const VorynAuthResult(accountAlreadyExists: true);
       }
-      return VorynAuthResult(error: error.message);
+      return VorynAuthResult(error: _friendlyAuthError(error.message));
     } catch (_) {
       return const VorynAuthResult(error: _backendUnavailableMessage);
     }
@@ -105,7 +119,7 @@ class VorynAuthService {
       );
       return const VorynAuthResult();
     } on AuthException catch (error) {
-      return VorynAuthResult(error: error.message);
+      return VorynAuthResult(error: _friendlyAuthError(error.message));
     } catch (_) {
       return const VorynAuthResult(error: _backendUnavailableMessage);
     }
@@ -127,7 +141,7 @@ class VorynAuthService {
       );
       return VorynAuthResult(user: response.user);
     } on AuthException catch (error) {
-      return VorynAuthResult(error: error.message);
+      return VorynAuthResult(error: _friendlyAuthError(error.message));
     } catch (_) {
       return const VorynAuthResult(error: 'Could not verify this email code.');
     }
@@ -142,7 +156,7 @@ class VorynAuthService {
       await client.auth.resend(type: OtpType.signup, email: email);
       return const VorynAuthResult();
     } on AuthException catch (error) {
-      return VorynAuthResult(error: error.message);
+      return VorynAuthResult(error: _friendlyAuthError(error.message));
     } catch (_) {
       return const VorynAuthResult(error: 'Could not resend the email code.');
     }
@@ -161,7 +175,7 @@ class VorynAuthService {
       );
       return VorynAuthResult(user: response.user);
     } on AuthException catch (error) {
-      return VorynAuthResult(error: error.message);
+      return VorynAuthResult(error: _friendlyAuthError(error.message));
     } catch (_) {
       return const VorynAuthResult(error: _backendUnavailableMessage);
     }
@@ -173,6 +187,29 @@ class VorynAuthService {
       return const VorynAuthResult(error: _backendUnavailableMessage);
     }
     try {
+      if (Platform.isAndroid) {
+        final googleSignIn = GoogleSignIn(scopes: const ['email']);
+        final account = await googleSignIn.signIn();
+        if (account == null) {
+          return const VorynAuthResult();
+        }
+
+        final authentication = await account.authentication;
+        final idToken = authentication.idToken;
+        if (idToken == null || idToken.isEmpty) {
+          return const VorynAuthResult(
+            error: 'Google did not return a valid sign-in token.',
+          );
+        }
+
+        final response = await client.auth.signInWithIdToken(
+          provider: OAuthProvider.google,
+          idToken: idToken,
+          accessToken: authentication.accessToken,
+        );
+        return VorynAuthResult(user: response.user);
+      }
+
       final launched = await client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: vorynOAuthRedirectUrl,

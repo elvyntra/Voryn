@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'package:go_router/go_router.dart';
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_avatar.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
-import '../calling/calling_screens.dart';
+import '../calling/voryn_call_service.dart';
 import '../v2/v2_shared.dart';
 
 enum _RecentFilter { all, missed, audio, video }
@@ -262,6 +263,36 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Future<void> _startDirectCall({required bool video}) async {
+    final scaffold = ScaffoldMessenger.of(context);
+    scaffold.showSnackBar(
+      SnackBar(
+        content: Text('Calling ${widget.user.displayName}…'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
+    final candidate = widget.user.backendUid ?? widget.user.id;
+    final req = await const VorynCallService().start(
+      vorynId: candidate,
+      video: video,
+    );
+
+    if (!mounted) return;
+    if (req.isSuccess && req.id != null) {
+      final loc = video
+          ? '/active-video-call/${req.id}'
+          : '/active-audio-call/${req.id}';
+      context.push(loc, extra: {'user': widget.user});
+    } else {
+      scaffold.showSnackBar(
+        SnackBar(
+          content: Text(req.error ?? 'Could not start call. Please try again.'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final spacing = context.vorynSpacing;
@@ -306,12 +337,7 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
                   child: _ConnectActionTile(
                     icon: Icons.phone_outlined,
                     label: 'Audio call',
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => AudioCallScreen(user: widget.user),
-                      ),
-                    ),
+                    onPressed: () => _startDirectCall(video: false),
                   ),
                 ),
                 SizedBox(width: spacing.sm),
@@ -319,12 +345,7 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
                   child: _ConnectActionTile(
                     icon: Icons.videocam_outlined,
                     label: 'Video call',
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VideoPreCallScreen(user: widget.user),
-                      ),
-                    ),
+                    onPressed: () => _startDirectCall(video: true),
                   ),
                 ),
                 SizedBox(width: spacing.sm),

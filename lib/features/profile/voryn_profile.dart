@@ -6,6 +6,7 @@ class VorynProfile {
     required this.vorynId,
     required this.phone,
     required this.phoneVerified,
+    this.avatarUrl,
   });
 
   final String uid;
@@ -14,6 +15,7 @@ class VorynProfile {
   final String? vorynId;
   final String? phone;
   final bool phoneVerified;
+  final String? avatarUrl;
 
   factory VorynProfile.fromMap(Map<String, dynamic> map) {
     return VorynProfile(
@@ -23,6 +25,7 @@ class VorynProfile {
       vorynId: map['voryn_id'] as String?,
       phone: map['phone'] as String?,
       phoneVerified: map['phone_verified'] as bool? ?? false,
+      avatarUrl: map['avatar_url'] as String?,
     );
   }
 
@@ -33,5 +36,6 @@ class VorynProfile {
     'voryn_id': vorynId,
     'phone': phone,
     'phone_verified': phoneVerified,
+    'avatar_url': avatarUrl,
   };
 }

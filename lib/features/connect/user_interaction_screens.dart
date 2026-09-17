@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:go_router/go_router.dart';
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_avatar.dart';
 import '../../shared/widgets/voryn_button.dart';
@@ -7,7 +8,8 @@ import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../../shared/widgets/voryn_text_input.dart';
 import 'mock_voryn_state.dart';
-import '../calling/calling_screens.dart';
+import '../calling/voryn_call_service.dart';
+import '../messages/voryn_call_message_service.dart';
 
 class UserPreviewScreen extends StatefulWidget {
   const UserPreviewScreen({super.key, required this.user});
@@ -25,6 +27,36 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
 
   void _feedback(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _startDirectCall({required bool video}) async {
+    final scaffold = ScaffoldMessenger.of(context);
+    scaffold.showSnackBar(
+      SnackBar(
+        content: Text('Calling ${user.displayName}…'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
+    final candidate = user.backendUid ?? user.id;
+    final req = await const VorynCallService().start(
+      vorynId: candidate,
+      video: video,
+    );
+
+    if (!mounted) return;
+    if (req.isSuccess && req.id != null) {
+      final loc = video
+          ? '/active-video-call/${req.id}'
+          : '/active-audio-call/${req.id}';
+      context.push(loc, extra: {'user': user});
+    } else {
+      scaffold.showSnackBar(
+        SnackBar(
+          content: Text(req.error ?? 'Could not start call. Please try again.'),
+        ),
+      );
+    }
   }
 
   @override
@@ -202,12 +234,7 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
                     label: 'Audio call',
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => AudioCallScreen(user: user),
-                        ),
-                      );
+                      _startDirectCall(video: false);
                     },
                   ),
                   _CallOption(
@@ -215,12 +242,7 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
                     label: 'Video call',
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => VideoPreCallScreen(user: user),
-                        ),
-                      );
+                      _startDirectCall(video: true);
                     },
                   ),
                   _CallOption(
@@ -474,6 +496,7 @@ class QuickMessageSheet extends StatefulWidget {
 class _QuickMessageSheetState extends State<QuickMessageSheet> {
   final _message = TextEditingController();
   bool _remind = false;
+  bool _sending = false;
   String? _preset;
 
   static const _presets = [
@@ -555,22 +578,38 @@ class _QuickMessageSheetState extends State<QuickMessageSheet> {
             ),
             VorynButton.primary(
               label: 'Send',
-              onPressed: canSend
-                  ? () {
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            _remind
-                                ? 'Message sent. We\'ll remind them that you\'d like a call back.'
-                                : 'Message sent',
-                          ),
-                        ),
-                      );
-                    }
-                  : null,
+              isLoading: _sending,
+              onPressed: canSend && !_sending ? _send : null,
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _send() async {
+    final text = _preset ?? _message.text;
+    setState(() => _sending = true);
+    final result = await const VorynCallMessageService().send(
+      recipientVorynId: widget.user.id,
+      body: text,
+      remindToCall: _remind,
+    );
+    if (!mounted) return;
+    setState(() => _sending = false);
+    if (!result.isSuccess) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(result.error!)));
+      return;
+    }
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _remind
+              ? 'Message sent. They were asked to call you back.'
+              : 'Message sent',
         ),
       ),
     );

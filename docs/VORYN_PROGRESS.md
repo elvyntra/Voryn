@@ -45,9 +45,21 @@ Phase 2.5 — Contacts and synchronization
 ## Next
 Apply the Phase 2.5 Supabase migration and validate contact sync on a physical device. Do not start Phase 2.6 without explicit approval.
 
+## Rescue Audit
+- Added `docs/VORYN_PHASE1_RESCUE_AUDIT.md` on 2026-09-12.
+- The audit records the actual current repository state and preserves the already-integrated Phase 2/backend work.
+- Incoming-call routing and LiveKit two-device reliability remain the highest-priority unresolved areas.
+
 ## Last Validation
 - dart format: passed
 - flutter analyze: passed
 - flutter test: passed
 - flutter build apk --debug: passed
 - flutter run: not executed
+# Call routing and lifecycle rescue — 2026-09-12
+
+- Moved Firebase Messaging initialization and contact hydration post-frame so auth/onboarding can render without competing startup work.
+- Added post-frame notification launch routing to the dedicated `/incoming-call` route after messaging launch details are available.
+- Made LiveKit session teardown idempotent and detach room listeners before disconnecting; `CallRequestScreen` now prevents duplicate end/dispose teardown.
+- Preserved existing Supabase, Firebase Messaging, LiveKit, and WebRTC integrations.
+- Validation run: `dart format` completed; `flutter analyze` and `flutter test` were started but produced no terminal output in this environment and require device/Flutter process confirmation.

@@ -6,8 +6,7 @@ void main() {
   testWidgets('Voryn auth flow renders welcome and sign in screens', (
     tester,
   ) async {
-    await tester.pumpWidget(const VorynApp());
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(const VorynApp(initialLocation: '/welcome'));
     await tester.pumpAndSettle();
 
     expect(find.text('Voryn'), findsOneWidget);
@@ -27,8 +26,7 @@ void main() {
   testWidgets('Forgot password validates the email before submitting', (
     tester,
   ) async {
-    await tester.pumpWidget(const VorynApp());
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(const VorynApp(initialLocation: '/welcome'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Sign in with email'));
@@ -116,13 +114,16 @@ void main() {
     expect(find.text('Recents'), findsOneWidget);
     expect(find.text('Contacts'), findsOneWidget);
     expect(find.text('Meetings'), findsOneWidget);
-    expect(find.text('Recently connected'), findsOneWidget);
+    expect(find.text('Saved contacts'), findsOneWidget);
 
     await tester.tap(find.text('Recents'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Your recent Voryn calls'), findsOneWidget);
-    expect(find.text('No recent calls'), findsOneWidget);
+    expect(find.text('Your real Voryn call history'), findsOneWidget);
+    expect(
+      find.text('No calls yet. Your completed Voryn calls will appear here.'),
+      findsOneWidget,
+    );
     expect(find.text('Recently connected'), findsNothing);
 
     await tester.tap(find.text('Contacts'));
@@ -131,6 +132,6 @@ void main() {
     expect(find.text('Your people on Voryn'), findsOneWidget);
     expect(find.text('My profile'), findsNothing);
     expect(find.text('Favorites'), findsOneWidget);
-    expect(find.byTooltip('Refresh contacts'), findsOneWidget);
+    expect(find.text('Refresh'), findsOneWidget);
   });
 }

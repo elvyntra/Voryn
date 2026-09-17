@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Voryn uses the camera for video calls and profile photos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Voryn uses the microphone for audio and video calls.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Voryn uses contacts to help you find people you know.</string>
+	<key>NSUserNotificationUsageDescription</key>
+	<string>Voryn sends notifications for calls, meetings, and messages.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
