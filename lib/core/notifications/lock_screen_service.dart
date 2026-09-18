@@ -19,6 +19,71 @@ class LockScreenService {
     }
   }
 
+  /// Retrieves device monotonic elapsed realtime in milliseconds (Android SystemClock.elapsedRealtime).
+  static Future<int> getElapsedRealtimeMs() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return DateTime.now().millisecondsSinceEpoch;
+    }
+    try {
+      final ms = await _channel.invokeMethod<int>('getElapsedRealtimeMs');
+      return ms ?? DateTime.now().millisecondsSinceEpoch;
+    } catch (_) {
+      return DateTime.now().millisecondsSinceEpoch;
+    }
+  }
+
+  /// Retrieves minimal native pending incoming call if persisted by Android notification manager.
+  static Future<Map<String, dynamic>?> getPendingIncomingCall() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return null;
+    }
+    try {
+      final res = await _channel.invokeMapMethod<String, dynamic>(
+        'getPendingIncomingCall',
+      );
+      return res;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Clears native pending call record in SharedPreferences.
+  static Future<void> clearPendingIncomingCall([String? callId]) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('clearPendingIncomingCall', {
+        'callId': callId,
+      });
+    } catch (_) {}
+  }
+
+  /// Checks if full-screen intent permission is granted (Android 14+).
+  static Future<bool> canUseFullScreenIntent() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return true;
+    }
+    try {
+      final allowed = await _channel.invokeMethod<bool>(
+        'canUseFullScreenIntent',
+      );
+      return allowed ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Opens Android 14+ full-screen intent settings screen for Voryn.
+  static Future<void> openFullScreenIntentSettings() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('openFullScreenIntentSettings');
+    } catch (_) {}
+  }
+
   /// Retrieves initial call launch payload and action captured by MainActivity on cold start.
   static Future<Map<String, String>?> getInitialCallLaunch() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -77,13 +142,33 @@ class LockScreenService {
     } catch (_) {}
   }
 
-  /// Cancels native incoming call notification.
-  static Future<void> cancelNativeIncomingCall(String callId) async {
+  /// Cancels native incoming call notification and stops ringtone.
+  static Future<void> cancelNativeIncomingCall(
+    String callId, {
+    String reason = 'remote_terminal',
+  }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return;
     }
     try {
       await _channel.invokeMethod<void>('cancelNativeIncomingCall', {
+        'callId': callId,
+        'reason': reason,
+      });
+    } catch (_) {}
+  }
+
+  /// Explicitly stops native incoming call ringtone.
+  static Future<void> stopRingtone({
+    String reason = 'remote_terminal',
+    String? callId,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('stopRingtone', {
+        'reason': reason,
         'callId': callId,
       });
     } catch (_) {}

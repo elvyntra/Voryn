@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:go_router/go_router.dart';
+import '../../core/backend/voryn_backend.dart';
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_avatar.dart';
 import '../../shared/widgets/voryn_button.dart';
@@ -9,6 +10,7 @@ import '../../shared/widgets/voryn_presence.dart';
 import '../../shared/widgets/voryn_text_input.dart';
 import 'mock_voryn_state.dart';
 import '../calling/voryn_call_service.dart';
+import '../contacts/voryn_contact_service.dart';
 import '../messages/voryn_call_message_service.dart';
 
 class UserPreviewScreen extends StatefulWidget {
@@ -23,10 +25,18 @@ class UserPreviewScreen extends StatefulWidget {
 class _UserPreviewScreenState extends State<UserPreviewScreen> {
   VorynMockUser get user => widget.user;
   bool get saved => user.isSaved;
-  bool get blocked => mockBlockedIds.contains(user.id);
+  late bool _blocked = mockBlockedIds.contains(user.id);
 
   void _feedback(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _toggleBlock(bool block) async {
+    setState(() => _blocked = block);
+    setMockBlocked(user, block);
+    final candidate = user.backendUid ?? user.id;
+    await const VorynContactService().setBlocked(candidate, block);
+    _feedback(block ? 'User blocked' : 'User unblocked');
   }
 
   Future<void> _startDirectCall({required bool video}) async {
@@ -97,7 +107,7 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
               ),
             ),
             SizedBox(height: spacing.xl),
-            if (blocked) ...[
+            if (_blocked) ...[
               VorynSurface(
                 child: Row(
                   children: [
@@ -115,16 +125,29 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
               SizedBox(height: spacing.md),
               VorynButton.secondary(
                 label: 'Unblock',
-                onPressed: () {
-                  setState(() => setMockBlocked(user, false));
-                  _feedback('User unblocked');
-                },
+                onPressed: () => _toggleBlock(false),
               ),
             ] else ...[
-              VorynButton.primary(
-                label: 'Connect',
-                leadingIcon: Icons.phone_outlined,
-                onPressed: () => _showCallSheet(context),
+              Row(
+                children: [
+                  _CallOption(
+                    icon: Icons.phone_outlined,
+                    label: 'Audio call',
+                    onTap: () => _startDirectCall(video: false),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  _CallOption(
+                    icon: Icons.videocam_outlined,
+                    label: 'Video call',
+                    onTap: () => _startDirectCall(video: true),
+                  ),
+                  SizedBox(width: spacing.xs),
+                  _CallOption(
+                    icon: Icons.chat_bubble_outline,
+                    label: 'Message',
+                    onTap: () => _showMessageSheet(context),
+                  ),
+                ],
               ),
               SizedBox(height: spacing.sm),
               if (saved)
@@ -195,73 +218,6 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
               label: const Text('Report user'),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  void _showCallSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              VorynAvatar(initials: user.initials, size: VorynAvatarSize.large),
-              const SizedBox(height: 12),
-              Text(
-                user.displayName,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              Text(
-                '${user.name} · ${user.id}',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'How do you want to connect?',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  _CallOption(
-                    icon: Icons.phone_outlined,
-                    label: 'Audio call',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _startDirectCall(video: false);
-                    },
-                  ),
-                  _CallOption(
-                    icon: Icons.videocam_outlined,
-                    label: 'Video call',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _startDirectCall(video: true);
-                    },
-                  ),
-                  _CallOption(
-                    icon: Icons.chat_bubble_outline,
-                    label: 'Message',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _showMessageSheet(context);
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: () => Navigator.pop(sheetContext),
-                child: const Text('Cancel'),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -343,10 +299,8 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
         ),
         TextButton(
           onPressed: () {
-            setMockBlocked(user, true);
             Navigator.pop(dialogContext);
-            setState(() {});
-            _feedback('User blocked');
+            _toggleBlock(true);
           },
           child: Text(
             'Block',
@@ -728,21 +682,62 @@ class ReportUserSheet extends StatefulWidget {
 }
 
 class _ReportUserSheetState extends State<ReportUserSheet> {
-  String? _reason;
+  String? _selectedCode;
   final _details = TextEditingController();
+  bool _submitting = false;
 
   static const _reasons = [
-    'Spam',
-    'Harassment',
-    'Impersonation',
-    'Inappropriate content',
-    'Other',
+    ('Spam', 'spam'),
+    ('Harassment', 'harassment'),
+    ('Impersonation', 'impersonation'),
+    ('Suspicious activity', 'suspicious_activity'),
+    ('Other', 'other'),
   ];
 
   @override
   void dispose() {
     _details.dispose();
     super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_selectedCode == null || _submitting) return;
+    setState(() => _submitting = true);
+    final client = VorynBackend.client;
+    final candidate = widget.user.backendUid ?? widget.user.id;
+    try {
+      if (client != null && client.auth.currentUser != null) {
+        await client.rpc(
+          'submit_user_report',
+          params: {
+            'candidate': candidate,
+            'report_reason': _selectedCode,
+            'report_details': _details.text.trim().isEmpty
+                ? null
+                : _details.text.trim(),
+          },
+        );
+      }
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Report submitted. Thank you for keeping Voryn safe.',
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not submit report. Please try again.'),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -771,25 +766,27 @@ class _ReportUserSheetState extends State<ReportUserSheet> {
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             SizedBox(height: spacing.md),
-            for (final reason in _reasons)
+            for (final entry in _reasons)
               VorynCard(
-                onPressed: () => setState(() => _reason = reason),
+                onPressed: _submitting
+                    ? null
+                    : () => setState(() => _selectedCode = entry.$2),
                 child: Row(
                   children: [
                     Icon(
-                      _reason == reason
+                      _selectedCode == entry.$2
                           ? Icons.radio_button_checked
                           : Icons.radio_button_off,
-                      color: _reason == reason
+                      color: _selectedCode == entry.$2
                           ? context.vorynColors.accent
                           : context.vorynColors.iconMuted,
                     ),
                     SizedBox(width: spacing.sm),
-                    Expanded(child: Text(reason)),
+                    Expanded(child: Text(entry.$1)),
                   ],
                 ),
               ),
-            if (_reason == 'Other')
+            if (_selectedCode == 'other')
               TextField(
                 controller: _details,
                 maxLength: 250,
@@ -800,14 +797,10 @@ class _ReportUserSheetState extends State<ReportUserSheet> {
             SizedBox(height: spacing.sm),
             VorynButton.primary(
               label: 'Submit report',
-              onPressed: _reason == null
+              isLoading: _submitting,
+              onPressed: (_selectedCode == null || _submitting)
                   ? null
-                  : () {
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Report submitted')),
-                      );
-                    },
+                  : _submit,
             ),
           ],
         ),

@@ -13,18 +13,21 @@ class IncomingCallActionReceiver : BroadcastReceiver() {
         Log.d("VorynCall", "[NATIVE_CALL] IncomingCallActionReceiver action=$action callId=$callId")
 
         if (action == "com.voryn.app.ACTION_DECLINE_CALL" || action == "decline") {
+            IncomingCallRingtoneManager.stop("decline", if (callId.isNotBlank()) callId else null)
+            IncomingCallActivity.dismiss()
+
             try {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 if (callId.isNotBlank()) {
                     nm.cancel(callId.hashCode())
                 }
-            } catch (e: Exception) {}
+            } catch (_: Exception) {}
 
             // Save to SharedPreferences so Flutter handles backend decline if needed
             try {
                 val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                 prefs.edit().putString("flutter.voryn.pending_call_decline", callId).apply()
-            } catch (e: Exception) {}
+            } catch (_: Exception) {}
 
             MainActivity.notifyCallDeclined(callId)
         }

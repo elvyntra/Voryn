@@ -36,14 +36,17 @@ void main() {
       expect(prefs.getString('voryn.active_call_id'), 'test-call-123');
     });
 
-    test('reconcileStaleActiveCallOnStartup cleans up when no backend client is active', () async {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('voryn.active_call_id', 'stale-call-789');
+    test(
+      'reconcileStaleActiveCallOnStartup cleans up when no backend client is active',
+      () async {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('voryn.active_call_id', 'stale-call-789');
 
-      const service = VorynCallService();
-      await service.reconcileStaleActiveCallOnStartup();
+        const service = VorynCallService();
+        await service.reconcileStaleActiveCallOnStartup();
 
-      expect(prefs.getString('voryn.active_call_id'), isNull);
-    });
+        expect(prefs.getString('voryn.active_call_id'), isNull);
+      },
+    );
   });
 }

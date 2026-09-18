@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart' as livekit;
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
 import '../../core/notifications/lock_screen_service.dart';
@@ -10,6 +9,8 @@ import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import 'voryn_call_history_service.dart';
+import 'voryn_call_latency_tracker.dart';
+import 'voryn_call_runtime_coordinator.dart';
 import 'voryn_call_service.dart';
 import 'voryn_livekit_service.dart';
 import 'widgets/add_participant_sheet.dart';
@@ -37,9 +38,10 @@ class ActiveVideoCallScreen extends StatefulWidget {
 
 class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   late VorynMockUser _user;
+  late final VorynCallRuntimeCoordinator _coordinator;
+  VorynCallLatencyTracker? _latencyTracker;
   VorynLiveKitSession? _session;
   Timer? _timer;
-  RealtimeChannel? _callSubscription;
   final ValueNotifier<Duration> _durationNotifier = ValueNotifier(
     Duration.zero,
   );
@@ -56,11 +58,22 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   bool _ending = false;
   bool _ended = false;
   bool _listenerAttached = false;
-  Future<void>? _teardownFuture;
 
   @override
   void initState() {
     super.initState();
+    LockScreenService.cancelNativeIncomingCall(widget.callId, reason: 'accept');
+    _coordinator = VorynCallRuntimeCoordinator.forCall(widget.callId);
+    _latencyTracker =
+        VorynCallLatencyTracker.get(widget.callId) ??
+        VorynCallLatencyTracker.start(callId: widget.callId);
+    unawaited(_latencyTracker?.stage('active_route_mounted'));
+
+    _coordinator.attachScreen(
+      onStatusChanged: _handleRealtimeStatus,
+      onRouteExit: _handleRouteExit,
+    );
+
     _user =
         widget.user ??
         findMockUser('@rahul') ??
@@ -110,26 +123,29 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
     if (widget.existingSession != null) {
       _session = widget.existingSession;
+      _coordinator.session = _session;
       _isConnected = true;
       await _session?.setCameraEnabled(true);
       _attachRoomListener();
-      _subscribeToCallEvents();
       _startTimer();
+      unawaited(_latencyTracker?.stage('call_connected_ui'));
       if (mounted) setState(() => _loading = false);
       return;
     }
 
     try {
-      _session = await const VorynLiveKitService().connect(
-        callId: widget.callId,
+      _session = await _coordinator.connect(
         video: true,
+        latencyTracker: _latencyTracker,
       );
       _attachRoomListener();
-      _subscribeToCallEvents();
       if (_session!.room.remoteParticipants.isNotEmpty) {
         _isConnected = true;
         _startTimer();
+        await _latencyTracker?.stage('backend_accept_start');
         await const VorynCallService().setConnected(widget.callId);
+        await _latencyTracker?.stage('backend_accept_done');
+        await _latencyTracker?.stage('call_connected_ui');
       } else {
         _callStatusText = 'Ringing…';
       }
@@ -138,38 +154,24 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       _isConnected = true;
       _callStatusText = 'Connected';
       _startTimer();
+      await _latencyTracker?.stage('call_connected_ui');
     }
     if (mounted) {
       setState(() => _loading = false);
     }
   }
 
-  void _subscribeToCallEvents() {
-    _callSubscription?.unsubscribe();
-    _callSubscription = const VorynCallService().subscribeToCallState(
-      widget.callId,
-      (status) {
-        debugPrint('[CALL ${widget.callId}] realtime state update: $status');
-        if ([
-          'completed',
-          'cancelled',
-          'declined',
-          'missed',
-          'failed',
-        ].contains(status)) {
-          debugPrint('[CALL ${widget.callId}] remote end received');
-          _teardownFuture ??= _performTeardown(isLocalInitiator: false);
-        } else if (status == 'connected' && !_isConnected) {
-          _isConnected = true;
-          _callStatusText = '';
-          _startTimer();
-          if (mounted) setState(() {});
-        } else if (status == 'ringing' && !_isConnected) {
-          _callStatusText = 'Ringing…';
-          if (mounted) setState(() {});
-        }
-      },
-    );
+  void _handleRealtimeStatus(String status) {
+    if (status == 'connected' && !_isConnected) {
+      _isConnected = true;
+      _callStatusText = '';
+      _startTimer();
+      unawaited(_latencyTracker?.stage('call_connected_ui'));
+      if (mounted) setState(() {});
+    } else if (status == 'ringing' && !_isConnected) {
+      _callStatusText = 'Ringing…';
+      if (mounted) setState(() {});
+    }
   }
 
   void _startTimer() {
@@ -241,14 +243,14 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
         debugPrint(
           '[CALL ${widget.callId}] backend confirms terminal status=$status',
         );
-        _teardownFuture ??= _performTeardown(isLocalInitiator: false);
+        _performTeardown(isLocalInitiator: false);
       } else {
         debugPrint(
           '[CALL ${widget.callId}] video media disconnected but call still active (status=$status)',
         );
       }
     } catch (_) {
-      _teardownFuture ??= _performTeardown(isLocalInitiator: false);
+      _performTeardown(isLocalInitiator: false);
     }
   }
 
@@ -274,8 +276,9 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     debugPrint(
       '[CALL ${widget.callId}] participant joined room, escalating to group',
     );
+    _coordinator.isTransitioning = true;
     _detachRoomListener();
-    _callSubscription?.unsubscribe();
+    _coordinator.detachScreen();
     final shortId = widget.callId.length > 8
         ? widget.callId.substring(0, 8)
         : widget.callId;
@@ -374,54 +377,33 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       _ending = true;
     }
     debugPrint('[CALL ${widget.callId}] local end pressed');
-    return _teardownFuture ??= _performTeardown(isLocalInitiator: true);
+    return _performTeardown(isLocalInitiator: true);
   }
 
-  Future<void> _performTeardown({bool isLocalInitiator = false}) async {
-    if (_ended) return;
+  Future<void> _performTeardown({bool isLocalInitiator = false}) {
     _ending = true;
-    debugPrint('[CALL ${widget.callId}] teardown begin');
     _timer?.cancel();
     _detachRoomListener();
-    _callSubscription?.unsubscribe();
+    return _coordinator.performTeardown(
+      isLocalInitiator: isLocalInitiator,
+      onRouteExit: _handleRouteExit,
+    );
+  }
 
-    if (isLocalInitiator) {
-      try {
-        await const VorynCallService().end(widget.callId);
-        debugPrint('[CALL ${widget.callId}] backend terminal update success');
-      } catch (e) {
-        debugPrint('[CALL ${widget.callId}] backend terminal update error: $e');
-      }
-    }
-
-    try {
-      await _session?.disconnect();
-      debugPrint('[CALL ${widget.callId}] room disconnect complete');
-    } catch (_) {}
-
+  Future<void> _handleRouteExit() async {
+    _ending = true;
     _ended = true;
-    await const VorynCallService().clearActiveCall(widget.callId);
-    _session = null;
-    debugPrint('[CALL ${widget.callId}] teardown complete');
-
-    final isLocked = await LockScreenService.isKeyguardLocked();
-    if (isLocked) {
-      debugPrint('[CALL ${widget.callId}] route exit (locked)');
-      await LockScreenService.moveCallTaskBehindKeyguard();
-      return;
-    }
-
-    debugPrint('[CALL ${widget.callId}] route exit');
-    if (mounted) {
-      if (context.canPop()) {
-        context.pop();
+    _timer?.cancel();
+    _detachRoomListener();
+    if (!mounted) return;
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      final client = VorynBackend.client;
+      if (client?.auth.currentUser != null) {
+        context.go('/connect');
       } else {
-        final client = VorynBackend.client;
-        if (client?.auth.currentUser != null) {
-          context.go('/connect');
-        } else {
-          context.go('/welcome');
-        }
+        context.go('/welcome');
       }
     }
   }
@@ -449,14 +431,14 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   void dispose() {
     _timer?.cancel();
     _detachRoomListener();
-    _callSubscription?.unsubscribe();
     _durationNotifier.dispose();
     _cameraEnabledNotifier.dispose();
     _mutedNotifier.dispose();
     _screenSharingNotifier.dispose();
-    if (!_ending && !_ended) {
-      _performTeardown(isLocalInitiator: true);
+    if (!_coordinator.isTransitioning && !_coordinator.isEnded) {
+      _coordinator.performTeardown(isLocalInitiator: true);
     }
+    _coordinator.detachScreen();
     super.dispose();
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:livekit_client/livekit_client.dart' as livekit;
 
 import '../../core/backend/voryn_backend.dart';
+import 'voryn_call_latency_tracker.dart';
 
 class VorynLiveKitSession {
   VorynLiveKitSession(this.room);
@@ -121,9 +122,6 @@ class VorynLiveKitSession {
       if (room.connectionState != livekit.ConnectionState.disconnected) {
         await room.disconnect();
       }
-      // Allow in-flight disconnect events (LocalTrackUnpublishedEvent, RoomDisconnectedEvent)
-      // to dispatch before disposing the room emitter.
-      await Future<void>.delayed(const Duration(milliseconds: 50));
     } catch (_) {
       // Best effort disconnect
     } finally {
@@ -143,16 +141,20 @@ class VorynLiveKitService {
   Future<VorynLiveKitSession> connect({
     required String callId,
     required bool video,
+    VorynCallLatencyTracker? latencyTracker,
   }) async {
     final client = VorynBackend.client;
     if (client == null || client.auth.currentSession == null) {
       throw const VorynLiveKitException('Sign in before joining a call.');
     }
 
+    await latencyTracker?.stage('livekit_token_start');
     final response = await client.functions.invoke(
       'livekit-token',
       body: {'callId': callId},
     );
+    await latencyTracker?.stage('livekit_token_done');
+
     final data = response.data;
     if (data is! Map) {
       throw const VorynLiveKitException('The call room is unavailable.');
@@ -167,9 +169,20 @@ class VorynLiveKitService {
 
     final room = livekit.Room();
     try {
+      await latencyTracker?.stage('livekit_connect_start');
       await room.connect(url, token);
+      await latencyTracker?.stage('signaling_connected');
+      await latencyTracker?.stage('ice_connected');
+
       await room.localParticipant?.setMicrophoneEnabled(true);
+      await latencyTracker?.stage('local_audio_ready');
+
       if (video) await room.localParticipant?.setCameraEnabled(true);
+
+      if (room.remoteParticipants.isNotEmpty) {
+        await latencyTracker?.stage('remote_audio_subscribed');
+      }
+
       return VorynLiveKitSession(room);
     } catch (_) {
       try {

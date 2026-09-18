@@ -19,8 +19,20 @@ class IncomingCallActivity : Activity() {
     private var callerName: String = "Voryn User"
     private var callType: String = "audio"
 
+    companion object {
+        private var activeInstance: IncomingCallActivity? = null
+
+        fun dismiss() {
+            activeInstance?.runOnUiThread {
+                activeInstance?.finish()
+                activeInstance = null
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activeInstance = this
 
         // Lock screen display flags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -51,7 +63,13 @@ class IncomingCallActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         extractExtras(intent)
+        Log.d("VorynCall", "[NATIVE_CALL] onNewIntent callId=$callId")
         bindViews()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.d("VorynCall", "[NATIVE_CALL] onResume")
     }
 
     private fun extractExtras(intent: Intent?) {
@@ -88,8 +106,19 @@ class IncomingCallActivity : Activity() {
         }
     }
 
+    override fun onDestroy() {
+        Log.d("VorynCall", "[NATIVE_CALL] onDestroy")
+        if (activeInstance == this) {
+            activeInstance = null
+        }
+        IncomingCallRingtoneManager.stop("activity_destroy", if (callId.isNotBlank()) callId else null)
+        super.onDestroy()
+    }
+
     private fun handleDecline() {
         Log.d("VorynCall", "[NATIVE_CALL] decline")
+        IncomingCallNotificationManager.clearPendingIncomingCall(this, callId)
+        IncomingCallRingtoneManager.stop("decline", if (callId.isNotBlank()) callId else null)
         cancelCallNotification()
 
         // Notify action receiver to record decline without starting MainActivity
@@ -104,6 +133,10 @@ class IncomingCallActivity : Activity() {
 
     private fun handleAccept() {
         Log.d("VorynCall", "[NATIVE_CALL] accept")
+        val acceptTimestamp = android.os.SystemClock.elapsedRealtime()
+        Log.d("VorynCall", "[CALL_LATENCY] accept_tap_native callId=$callId elapsed=0ms")
+        IncomingCallNotificationManager.setPendingCallAccepting(this, callId)
+        IncomingCallRingtoneManager.stop("accept", if (callId.isNotBlank()) callId else null)
         cancelCallNotification()
 
         val acceptIntent = Intent(this, MainActivity::class.java).apply {
@@ -115,6 +148,7 @@ class IncomingCallActivity : Activity() {
             putExtra("callId", callId)
             putExtra("call_type", callType)
             putExtra("callType", callType)
+            putExtra("accept_timestamp", acceptTimestamp)
         }
         startActivity(acceptIntent)
         finish()
@@ -126,7 +160,7 @@ class IncomingCallActivity : Activity() {
             if (callId.isNotBlank()) {
                 nm.cancel(callId.hashCode())
             }
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
     }
 
     private fun computeInitials(name: String): String {

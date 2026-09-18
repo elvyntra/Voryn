@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/backend/voryn_backend.dart';
 import 'core/notifications/lock_screen_service.dart';
 import 'core/notifications/voryn_firebase_messaging.dart';
+import 'core/presence/voryn_presence_service.dart';
 import 'core/theme/voryn_theme.dart';
 import 'core/theme/voryn_theme_controller.dart';
 import 'features/auth/auth_screens.dart';
@@ -18,6 +19,7 @@ import 'features/calling/active_video_call_screen.dart';
 import 'features/calling/group_call_screen.dart';
 import 'features/calling/incoming_call_screen.dart';
 import 'features/calling/voryn_call_history_service.dart';
+import 'features/calling/voryn_call_latency_tracker.dart';
 import 'features/calling/voryn_call_service.dart';
 import 'features/calling/voryn_livekit_service.dart';
 import 'features/contacts/contacts_live_screen.dart';
@@ -72,6 +74,17 @@ Future<AppLaunchConfig> resolveAppLaunchConfig() async {
     final isVideo = callType == 'video';
 
     if (actionId == 'accept') {
+      final acceptTimestamp =
+          int.tryParse(nativeLaunch?['acceptTimestamp'] ?? '') ?? 0;
+      final tracker = VorynCallLatencyTracker.start(
+        callId: callId,
+        baseTimestampMs: acceptTimestamp > 0 ? acceptTimestamp : null,
+      );
+      unawaited(tracker.stage('flutter_accept_received'));
+      await LockScreenService.cancelNativeIncomingCall(
+        callId,
+        reason: 'accept',
+      );
       final loc = isVideo
           ? '/active-video-call/$callId'
           : '/active-audio-call/$callId';
@@ -94,6 +107,27 @@ Future<AppLaunchConfig> resolveAppLaunchConfig() async {
         initialLocation: loc,
       );
     }
+  }
+
+  // Open-app pending call recovery: User opens Voryn while an incoming call is pending
+  try {
+    final pending = await const VorynCallService().getPendingIncomingCall();
+    if (pending != null &&
+        (pending.status == 'calling' || pending.status == 'ringing')) {
+      final isVideo = pending.callType == 'video';
+      final loc = '/incoming-call/${pending.id}';
+      debugPrint('[BOOT] recovered pending incoming call: ${pending.id}');
+      debugPrint('[BOOT] launchMode=incomingCall');
+      debugPrint('[BOOT] router initialLocation=$loc');
+      return AppLaunchConfig(
+        mode: AppLaunchMode.incomingCall,
+        callId: pending.id,
+        callType: isVideo ? 'video' : 'audio',
+        initialLocation: loc,
+      );
+    }
+  } catch (e) {
+    debugPrint('[BOOT] error checking pending incoming call on cold start: $e');
   }
 
   debugPrint('[BOOT] launchMode=normal');
@@ -137,7 +171,7 @@ class VorynApp extends StatefulWidget {
   State<VorynApp> createState() => _VorynAppState();
 }
 
-class _VorynAppState extends State<VorynApp> {
+class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
   final _auth = const VorynAuthService();
   late final VorynThemeController _controller =
       widget.controller ?? VorynThemeController();
@@ -150,6 +184,8 @@ class _VorynAppState extends State<VorynApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    VorynPresenceService.onLifecycleChanged(AppLifecycleState.resumed);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!_firstFrameReported) {
         _firstFrameReported = true;
@@ -178,6 +214,7 @@ class _VorynAppState extends State<VorynApp> {
         if (state.event == AuthChangeEvent.passwordRecovery) {
           _router.go('/reset-password');
         } else if (state.event == AuthChangeEvent.signedIn) {
+          VorynPresenceService.setOnline();
           VorynFirebaseMessaging.registerTokenAfterSplash();
           if (!_isCallRouteActive() &&
               widget.initialLaunchConfig?.mode == AppLaunchMode.normal) {
@@ -192,8 +229,38 @@ class _VorynAppState extends State<VorynApp> {
               );
             }
           }
+        } else if (state.event == AuthChangeEvent.signedOut) {
+          VorynPresenceService.setOffline();
         }
       });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    VorynPresenceService.onLifecycleChanged(state);
+    if (state == AppLifecycleState.resumed) {
+      _checkPendingIncomingCall();
+    }
+  }
+
+  Future<void> _checkPendingIncomingCall() async {
+    if (_isCallRouteActive()) return;
+    final currentUser = VorynBackend.client?.auth.currentUser;
+    if (currentUser == null) return;
+
+    try {
+      final pending = await const VorynCallService().getPendingIncomingCall();
+      if (pending != null &&
+          (pending.status == 'calling' || pending.status == 'ringing')) {
+        if (!_isCallRouteActive() && mounted) {
+          debugPrint('[RESUME] recovered pending incoming call: ${pending.id}');
+          _router.go('/incoming-call/${pending.id}');
+        }
+      }
+    } catch (e) {
+      debugPrint('[RESUME] error checking pending incoming call: $e');
     }
   }
 
@@ -238,6 +305,12 @@ class _VorynAppState extends State<VorynApp> {
     final isVideo = activeCall.callType == 'video' || callType == 'video';
 
     if (actionId == 'accept') {
+      final acceptTimestamp = int.tryParse(data['acceptTimestamp'] ?? '') ?? 0;
+      final tracker = VorynCallLatencyTracker.start(
+        callId: callId,
+        baseTimestampMs: acceptTimestamp > 0 ? acceptTimestamp : null,
+      );
+      unawaited(tracker.stage('flutter_accept_received'));
       _router.go(
         isVideo ? '/active-video-call/$callId' : '/active-audio-call/$callId',
       );
@@ -286,6 +359,10 @@ class _VorynAppState extends State<VorynApp> {
     // Call is active and valid: map explicit action
     if (launch.action == VorynNotificationActionType.accept) {
       VorynFirebaseMessaging.clearPendingIncomingCall(launch.callId);
+      await LockScreenService.cancelNativeIncomingCall(
+        launch.callId,
+        reason: 'accept',
+      );
       final isVideo = activeCall.callType == 'video';
       if (isVideo) {
         _router.go('/active-video-call/${launch.callId}');
@@ -299,6 +376,7 @@ class _VorynAppState extends State<VorynApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _authSubscription?.cancel();
     _router.dispose();
     super.dispose();

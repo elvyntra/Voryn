@@ -9,6 +9,9 @@ import '../../shared/widgets/voryn_button.dart';
 import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_text_input.dart';
 import '../auth/voryn_auth_service.dart';
+import 'blocked_users_live_screen.dart';
+import 'privacy_settings_live_screen.dart';
+import 'profile_screens.dart';
 import 'voryn_profile.dart';
 import 'voryn_profile_service.dart';
 
@@ -137,11 +140,90 @@ class _ProfileBody extends StatelessWidget {
           ),
         ),
         VorynCard(
-          onPressed: () async {
-            await const VorynAuthService().signOut();
-            if (context.mounted) context.go('/welcome');
-          },
-          child: _SettingRow(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const PrivacySettingsLiveScreen(),
+            ),
+          ),
+          child: const _SettingRow(
+            icon: Icons.lock_outline_rounded,
+            label: 'Privacy',
+          ),
+        ),
+        VorynCard(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AppearanceScreen()),
+          ),
+          child: const _SettingRow(
+            icon: Icons.palette_outlined,
+            label: 'Appearance',
+          ),
+        ),
+        VorynCard(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const BlockedUsersLiveScreen()),
+          ),
+          child: const _SettingRow(
+            icon: Icons.block_outlined,
+            label: 'Blocked users',
+          ),
+        ),
+        VorynCard(
+          onPressed: () => showDialog<void>(
+            context: context,
+            builder: (dCtx) => AlertDialog(
+              title: const Text('About Voryn'),
+              content: const Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Voryn v1.0.0'),
+                  SizedBox(height: 8),
+                  Text('Private, secure calling and communication.'),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dCtx),
+                  child: const Text('Close'),
+                ),
+              ],
+            ),
+          ),
+          child: const _SettingRow(
+            icon: Icons.help_outline_rounded,
+            label: 'Help & About',
+          ),
+        ),
+        VorynCard(
+          onPressed: () => showDialog<void>(
+            context: context,
+            builder: (dCtx) => AlertDialog(
+              title: const Text('Log out of Voryn?'),
+              content: const Text("You'll need to sign in again to continue."),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dCtx),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(dCtx);
+                    await const VorynAuthService().signOut();
+                    if (context.mounted) context.go('/welcome');
+                  },
+                  child: Text(
+                    'Log out',
+                    style: TextStyle(color: context.vorynColors.danger),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          child: const _SettingRow(
             icon: Icons.logout_rounded,
             label: 'Log out',
             destructive: true,

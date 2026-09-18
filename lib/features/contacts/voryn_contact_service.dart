@@ -39,6 +39,36 @@ class VorynStoredContact {
   }
 }
 
+class VorynBlockedUser {
+  const VorynBlockedUser({
+    required this.uid,
+    required this.displayName,
+    required this.vorynId,
+    this.avatarUrl,
+    required this.blockedAt,
+  });
+
+  final String uid;
+  final String displayName;
+  final String vorynId;
+  final String? avatarUrl;
+  final DateTime blockedAt;
+
+  factory VorynBlockedUser.fromMap(Map<String, dynamic> map) {
+    return VorynBlockedUser(
+      uid: map['uid'] as String,
+      displayName: (map['display_name'] as String?)?.trim().isNotEmpty == true
+          ? map['display_name'] as String
+          : map['voryn_id'] as String? ?? 'Voryn user',
+      vorynId: map['voryn_id'] as String? ?? '',
+      avatarUrl: map['avatar_url'] as String?,
+      blockedAt:
+          DateTime.tryParse(map['blocked_at'] as String? ?? '') ??
+          DateTime.now(),
+    );
+  }
+}
+
 class VorynContactSyncResult {
   const VorynContactSyncResult({
     required this.contacts,
@@ -98,11 +128,29 @@ class VorynContactService {
     await _rpc('remove_voryn_contact', {'candidate': vorynId});
   }
 
-  Future<void> setBlocked(String vorynId, bool blocked) async {
+  Future<void> setBlocked(String candidate, bool blocked) async {
     await _rpc('set_voryn_user_blocked', {
-      'candidate': vorynId,
+      'candidate': candidate,
       'is_blocked': blocked,
     });
+  }
+
+  Future<void> unblockUser(String candidate) => setBlocked(candidate, false);
+
+  Future<List<VorynBlockedUser>> loadBlockedUsers() async {
+    final client = _client;
+    if (client == null || client.auth.currentUser == null) return const [];
+    try {
+      final rows = await client.rpc('list_blocked_users');
+      return (rows as List<dynamic>)
+          .map(
+            (row) =>
+                VorynBlockedUser.fromMap(Map<String, dynamic>.from(row as Map)),
+          )
+          .toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<VorynContactSyncResult> syncDeviceContacts() async {

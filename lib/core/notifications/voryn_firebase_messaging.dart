@@ -13,7 +13,10 @@ import 'lock_screen_service.dart';
 @pragma('vm:entry-point')
 Future<void> vorynFirebaseBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
+  final callId = message.data['call_id'] ?? '';
+  debugPrint('[FCM_CALL] background receive callId=$callId');
   await Firebase.initializeApp();
+  debugPrint('[FCM_CALL] native presentation requested callId=$callId');
   await VorynFirebaseMessaging.showIncomingCallNotification(message);
 }
 
@@ -48,11 +51,12 @@ class VorynFirebaseMessaging {
   static bool _isInitialized = false;
   static VorynPendingCallLaunch? _pendingLaunch;
   static const _callChannel = AndroidNotificationChannel(
-    'voryn_incoming_calls_v2',
+    'voryn_incoming_calls_v3',
     'Incoming calls',
     description: 'Incoming Voryn call alerts',
     importance: Importance.max,
-    playSound: true,
+    playSound: false,
+    enableVibration: false,
   );
   static final _localNotifications = FlutterLocalNotificationsPlugin();
 
@@ -98,7 +102,12 @@ class VorynFirebaseMessaging {
 
     final messaging = FirebaseMessaging.instance;
     messaging.onTokenRefresh.listen(_registerToken);
-    FirebaseMessaging.onMessage.listen(showIncomingCallNotification);
+    FirebaseMessaging.onMessage.listen((message) async {
+      final callId = message.data['call_id'] ?? '';
+      debugPrint('[FCM_CALL] foreground receive callId=$callId');
+      debugPrint('[FCM_CALL] native presentation requested callId=$callId');
+      await showIncomingCallNotification(message);
+    });
   }
 
   static Future<void> _initializeLocalNotifications({
@@ -129,7 +138,21 @@ class VorynFirebaseMessaging {
     RemoteMessage message,
   ) async {
     final data = message.data;
-    if (data['type'] != 'incoming_call') return;
+    final type = data['type'];
+    if (type == 'cancel_call' ||
+        type == 'call_cancelled' ||
+        type == 'call_ended') {
+      final callId = data['call_id'];
+      if (callId != null && callId.isNotEmpty) {
+        clearPendingIncomingCall(callId);
+        await LockScreenService.cancelNativeIncomingCall(
+          callId,
+          reason: 'remote_terminal',
+        );
+      }
+      return;
+    }
+    if (type != 'incoming_call') return;
 
     await _initializeLocalNotifications();
     final callId = data['call_id'];
@@ -225,6 +248,7 @@ class VorynFirebaseMessaging {
 
   static Future<void> handleDeclineAction(String callId) async {
     clearPendingIncomingCall(callId);
+    await LockScreenService.cancelNativeIncomingCall(callId, reason: 'decline');
     final client = VorynBackend.client;
     if (client?.auth.currentUser != null) {
       try {

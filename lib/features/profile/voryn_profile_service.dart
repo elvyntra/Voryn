@@ -1,9 +1,41 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
 import 'voryn_profile.dart';
+
+class VorynPrivacySettings {
+  const VorynPrivacySettings({
+    required this.dndEnabled,
+    required this.whoCanCall,
+    required this.showOnlineStatus,
+  });
+
+  final bool dndEnabled;
+  final String whoCanCall; // 'everyone', 'saved_contacts', 'nobody'
+  final bool showOnlineStatus;
+
+  factory VorynPrivacySettings.fromMap(Map<String, dynamic> map) {
+    return VorynPrivacySettings(
+      dndEnabled: (map['dnd_enabled'] as bool?) ?? false,
+      whoCanCall: (map['who_can_call'] as String?) ?? 'everyone',
+      showOnlineStatus: (map['show_online_status'] as bool?) ?? true,
+    );
+  }
+
+  VorynPrivacySettings copyWith({
+    bool? dndEnabled,
+    String? whoCanCall,
+    bool? showOnlineStatus,
+  }) {
+    return VorynPrivacySettings(
+      dndEnabled: dndEnabled ?? this.dndEnabled,
+      whoCanCall: whoCanCall ?? this.whoCanCall,
+      showOnlineStatus: showOnlineStatus ?? this.showOnlineStatus,
+    );
+  }
+}
 
 class VorynIdAvailability {
   const VorynIdAvailability({this.isAvailable, this.error});
@@ -157,5 +189,53 @@ class VorynProfileService {
     final normalized = value.trim().replaceFirst('@', '').toLowerCase();
     if (!RegExp(r'^[a-z0-9_]{3,24}$').hasMatch(normalized)) return null;
     return normalized;
+  }
+
+  Future<VorynPrivacySettings?> loadPrivacySettings() async {
+    final client = _client;
+    final user = client?.auth.currentUser;
+    if (client == null || user == null) return null;
+    try {
+      final res = await client.rpc('get_my_settings');
+      if (res is List && res.isNotEmpty) {
+        return VorynPrivacySettings.fromMap(
+          Map<String, dynamic>.from(res.first as Map),
+        );
+      } else if (res is Map) {
+        return VorynPrivacySettings.fromMap(Map<String, dynamic>.from(res));
+      }
+      return const VorynPrivacySettings(
+        dndEnabled: false,
+        whoCanCall: 'everyone',
+        showOnlineStatus: true,
+      );
+    } catch (e) {
+      debugPrint('[PROFILE] Failed to load privacy settings: $e');
+      return null;
+    }
+  }
+
+  Future<bool> updatePrivacySettings({
+    bool? dndEnabled,
+    String? whoCanCall,
+    bool? showOnlineStatus,
+  }) async {
+    final client = _client;
+    final user = client?.auth.currentUser;
+    if (client == null || user == null) return false;
+    try {
+      final res = await client.rpc(
+        'update_my_privacy_settings',
+        params: {
+          'new_dnd': ?dndEnabled,
+          'new_who_can_call': ?whoCanCall,
+          'new_show_online': ?showOnlineStatus,
+        },
+      );
+      return res == true;
+    } catch (e) {
+      debugPrint('[PROFILE] Failed to update privacy settings: $e');
+      return false;
+    }
   }
 }

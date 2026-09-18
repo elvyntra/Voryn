@@ -155,25 +155,40 @@ Deno.serve(async (request) => {
     if (!accessToken) throw new Error('Could not authorize Firebase messaging.');
 
     const endpoint = `https://fcm.googleapis.com/v1/projects/${credentials.project_id}/messages:send`;
-    const responses = await Promise.all(tokens.map((token) => fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: {
-          token,
-          data: {
-            type: 'incoming_call',
-            call_id: callId,
-            call_type: call.call_type,
-            caller_name: callerName,
-          },
-          android: { priority: 'high' },
+    console.log(`[FCM_CALL] send start callId=${callId} recipient=${targetRecipientUid}`);
+    const responses = await Promise.all(tokens.map(async (token) => {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
         },
-      }),
-    })));
+        body: JSON.stringify({
+          message: {
+            token,
+            data: {
+              type: 'incoming_call',
+              call_id: callId,
+              call_type: call.call_type,
+              caller_name: callerName,
+            },
+            android: {
+              priority: 'HIGH',
+              ttl: '30s',
+            },
+          },
+        }),
+      });
+      try {
+        const resJson = await response.json();
+        if (response.ok) {
+          console.log(`[FCM_CALL] send success messageId=${resJson.name}`);
+        } else {
+          console.error(`[FCM_CALL] send failure status=${response.status} body=${JSON.stringify(resJson)}`);
+        }
+      } catch (_) {}
+      return response;
+    }));
 
     return Response.json({
       delivered: responses.filter((response) => response.ok).length,

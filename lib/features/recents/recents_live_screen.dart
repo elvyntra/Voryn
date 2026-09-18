@@ -6,8 +6,8 @@ import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../calling/voryn_call_history_service.dart';
 import '../connect/mock_voryn_state.dart';
-import '../connect/user_interaction_screens.dart';
 import '../v2/v2_shared.dart';
+import 'recents_screen.dart';
 
 class RecentsLiveScreen extends StatefulWidget {
   const RecentsLiveScreen({super.key});
@@ -112,7 +112,7 @@ class _CallRow extends StatelessWidget {
       child: VorynCard(
         onPressed: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => UserPreviewScreen(user: user)),
+          MaterialPageRoute(builder: (_) => CallDetailsScreen(user: user)),
         ),
         child: Row(
           children: [

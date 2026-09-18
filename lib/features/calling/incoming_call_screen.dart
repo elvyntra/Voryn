@@ -10,6 +10,7 @@ import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
 import 'voryn_call_history_service.dart';
+import 'voryn_call_latency_tracker.dart';
 import 'voryn_call_service.dart';
 import 'widgets/call_avatar_rings.dart';
 import 'widgets/call_top_bar.dart';
@@ -68,6 +69,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
           );
           _resolved = true;
           VorynFirebaseMessaging.clearPendingIncomingCall(widget.callId);
+          LockScreenService.cancelNativeIncomingCall(
+            widget.callId,
+            reason: 'remote_terminal',
+          );
           _exitSafely();
         }
       },
@@ -83,6 +88,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
       if (active == null) {
         // The call is stale, already ended, or unavailable
+        LockScreenService.cancelNativeIncomingCall(
+          widget.callId,
+          reason: 'stale',
+        );
         _exitSafely();
         return;
       }
@@ -116,7 +125,17 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     if (_resolved) return;
     _resolved = true;
     _callSubscription?.unsubscribe();
+    final acceptMs = await LockScreenService.getElapsedRealtimeMs();
+    final tracker = VorynCallLatencyTracker.start(
+      callId: widget.callId,
+      baseTimestampMs: acceptMs,
+    );
+    await tracker.stage('flutter_accept_received');
     VorynFirebaseMessaging.clearPendingIncomingCall(widget.callId);
+    await LockScreenService.cancelNativeIncomingCall(
+      widget.callId,
+      reason: 'accept',
+    );
 
     final isVideo = _call?.callType == 'video';
     if (!mounted) return;
@@ -139,6 +158,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _resolved = true;
     _callSubscription?.unsubscribe();
     VorynFirebaseMessaging.clearPendingIncomingCall(widget.callId);
+    await LockScreenService.cancelNativeIncomingCall(
+      widget.callId,
+      reason: 'decline',
+    );
 
     try {
       await const VorynCallService().decline(widget.callId);
@@ -150,6 +173,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   @override
   void dispose() {
     _callSubscription?.unsubscribe();
+    LockScreenService.cancelNativeIncomingCall(
+      widget.callId,
+      reason: 'activity_destroy',
+    );
     super.dispose();
   }
 

@@ -7,7 +7,9 @@ import '../../shared/widgets/voryn_card.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
+import '../calling/voryn_call_history_service.dart';
 import '../calling/voryn_call_service.dart';
+import '../contacts/voryn_contact_service.dart';
 import '../v2/v2_shared.dart';
 
 enum _RecentFilter { all, missed, audio, video }
@@ -251,6 +253,19 @@ class CallDetailsScreen extends StatefulWidget {
 }
 
 class _CallDetailsScreenState extends State<CallDetailsScreen> {
+  late final Future<List<VorynCallHistoryItem>> _historyFuture = _loadHistory();
+
+  Future<List<VorynCallHistoryItem>> _loadHistory() async {
+    final allCalls = await const VorynCallHistoryService().load();
+    final targetUid = widget.user.backendUid;
+    final targetVorynId = widget.user.id.replaceAll('@', '').toLowerCase();
+    return allCalls.where((item) {
+      if (targetUid != null && item.otherUid == targetUid) return true;
+      if (item.vorynId.toLowerCase() == targetVorynId) return true;
+      return false;
+    }).toList();
+  }
+
   List<VorynMockCall> get _history => mockRecentCalls
       .where(
         (call) =>
@@ -361,21 +376,31 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
             SizedBox(height: spacing.xl),
             Text('Call history', style: Theme.of(context).textTheme.labelLarge),
             SizedBox(height: spacing.sm),
-            if (_history.isEmpty)
-              VorynSurface(
-                child: Text(
-                  'No recent calls',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              )
-            else
-              VorynSurface(
-                child: Column(
-                  children: [
-                    for (final call in _history) _TimelineRow(call: call),
-                  ],
-                ),
-              ),
+            FutureBuilder<List<VorynCallHistoryItem>>(
+              future: _historyFuture,
+              builder: (context, snapshot) {
+                final items = snapshot.data;
+                if (items != null && items.isNotEmpty) {
+                  return VorynSurface(
+                    child: Column(
+                      children: [
+                        for (final item in items) _LiveTimelineRow(item: item),
+                      ],
+                    ),
+                  );
+                }
+                if (_history.isNotEmpty) {
+                  return VorynSurface(
+                    child: Column(
+                      children: [
+                        for (final call in _history) _TimelineRow(call: call),
+                      ],
+                    ),
+                  );
+                }
+                return const VorynSurface(child: Text('No recent calls'));
+              },
+            ),
             SizedBox(height: spacing.xl),
             VorynCard(
               onPressed: () => Navigator.of(context)
@@ -502,9 +527,11 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
           child: const Text('Cancel'),
         ),
         TextButton(
-          onPressed: () {
+          onPressed: () async {
             setMockBlocked(widget.user, true);
-            Navigator.pop(dialogContext);
+            final candidate = widget.user.backendUid ?? widget.user.id;
+            await const VorynContactService().setBlocked(candidate, true);
+            if (dialogContext.mounted) Navigator.pop(dialogContext);
             _feedback('User blocked');
           },
           child: Text(
@@ -515,6 +542,60 @@ class _CallDetailsScreenState extends State<CallDetailsScreen> {
       ],
     ),
   );
+}
+
+class _LiveTimelineRow extends StatelessWidget {
+  const _LiveTimelineRow({required this.item});
+
+  final VorynCallHistoryItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final spacing = context.vorynSpacing;
+    final isVideo = item.callType == 'video';
+    final isOutgoing = item.direction == 'outgoing';
+    final statusText = switch (item.status) {
+      'missed' => 'Missed ${item.callType} call',
+      'declined' => 'Declined ${item.callType} call',
+      'cancelled' => 'Cancelled ${item.callType} call',
+      'failed' => 'Failed ${item.callType} call',
+      _ => '${isOutgoing ? '↗ Outgoing' : '↙ Incoming'} ${item.callType}',
+    };
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: spacing.sm),
+      child: Row(
+        children: [
+          Icon(
+            isVideo ? Icons.videocam_outlined : Icons.phone_outlined,
+            color: context.vorynColors.accent,
+            size: 20,
+          ),
+          SizedBox(width: spacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(statusText, style: Theme.of(context).textTheme.titleSmall),
+                Text(
+                  _formatCallTime(item.createdAt),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatCallTime(DateTime dateTime) {
+  final diff = DateTime.now().difference(dateTime.toLocal());
+  if (diff.inMinutes < 1) return 'Just now';
+  if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+  if (diff.inDays < 1) return '${diff.inHours}h ago';
+  return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
 }
 
 class _TimelineRow extends StatelessWidget {
