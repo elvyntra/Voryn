@@ -218,6 +218,7 @@ class VorynCallRuntimeCoordinator {
     debugPrint('[CALL $callId] [COORDINATOR] teardown complete');
 
     await LockScreenService.setCallPresentationVisible(false);
+    await LockScreenService.markDartTeardownComplete(callId);
 
     if (!_routeExitIssued) {
       _routeExitIssued = true;

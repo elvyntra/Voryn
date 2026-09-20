@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -142,13 +143,29 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
           baseTimestampMs: acceptMs,
         );
         await tracker.stage('flutter_accept_received');
-        VorynFirebaseMessaging.clearPendingIncomingCall(widget.callId);
+        final isVideo = _call?.callType == 'video';
+        final callType = isVideo ? 'video' : 'audio';
+
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+          debugPrint(
+            '[CALL ${widget.callId}] handing off foreground accept to VorynCallActivity',
+          );
+          await LockScreenService.acceptIncomingCall(
+            callId: widget.callId,
+            callType: callType,
+            callerName: _user.name,
+          );
+          if (mounted) {
+            _exitSafely();
+          }
+          return;
+        }
+
         await LockScreenService.cancelNativeIncomingCall(
           widget.callId,
           reason: 'accept',
         );
 
-        final isVideo = _call?.callType == 'video';
         if (!mounted) return;
 
         if (isVideo) {

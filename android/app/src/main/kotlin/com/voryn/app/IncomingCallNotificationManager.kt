@@ -74,14 +74,23 @@ object IncomingCallNotificationManager {
         VorynCallStateManager.clear(context, callId)
     }
 
+    enum class IncomingNotificationMode {
+        FULL_SCREEN_CALL_STYLE,
+        STANDARD_HEADS_UP
+    }
+
     fun showIncomingCall(
         context: Context,
         callId: String,
         callerName: String,
-        callType: String
+        callType: String,
+        mode: IncomingNotificationMode = IncomingNotificationMode.FULL_SCREEN_CALL_STYLE
     ) {
         ensureChannel(context)
         recordPendingIncomingCall(context, callId, callType, callerName)
+
+        val useCallStyle = (mode == IncomingNotificationMode.FULL_SCREEN_CALL_STYLE)
+        val useFullScreenIntent = (mode == IncomingNotificationMode.FULL_SCREEN_CALL_STYLE)
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
@@ -116,13 +125,19 @@ object IncomingCallNotificationManager {
         Log.d("VorynCall", "[INCOMING] canUseFullScreenIntent=$canUseFullScreenIntent")
         Log.d("VorynCall", "[INCOMING] channelId=$CHANNEL_ID")
         Log.d("VorynCall", "[INCOMING] channelImportance=$channelImportance")
-        Log.d("VorynCall", "[LOCKSCREEN] FSI target=IncomingCallActivity")
-        Log.d("VorynCall", "[INCOMING] fullScreenPendingIntentTarget=IncomingCallActivity")
+        Log.d("VorynCall", "[INCOMING] useFullScreenIntent=$useFullScreenIntent")
+        Log.d("VorynCall", "[INCOMING_NOTIFICATION] mode=$mode callId=$callId")
+        Log.d("VorynCall", "[INCOMING_NOTIFICATION] useCallStyle=$useCallStyle useFullScreenIntent=$useFullScreenIntent")
+
+        if (useFullScreenIntent) {
+            Log.d("VorynCall", "[LOCKSCREEN] FSI target=IncomingCallActivity")
+            Log.d("VorynCall", "[INCOMING] fullScreenPendingIntentTarget=IncomingCallActivity")
+        }
 
         // Start ringing sound & vibration through authoritative ringtone manager
         IncomingCallRingtoneManager.start(context, callId)
 
-        // 1. Full-screen intent pointing directly to IncomingCallActivity
+        // 1. Full-screen intent pointing directly to IncomingCallActivity (for lock-screen FSI only)
         val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("call_id", callId)
@@ -148,7 +163,7 @@ object IncomingCallNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // 3. Accept action (Broadcast to IncomingCallActionReceiver to capture exact tap timestamp)
+        // 3. Accept action (Broadcast to IncomingCallActionReceiver to launch VorynCallActivity)
         val acceptIntent = Intent(context, IncomingCallActionReceiver::class.java).apply {
             action = "com.voryn.app.ACTION_ACCEPT_CALL"
             putExtra("call_id", callId)
@@ -162,34 +177,46 @@ object IncomingCallNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val callerPerson = Person.Builder()
-            .setName(callerName.ifBlank { "Voryn User" })
-            .setImportant(true)
-            .build()
-
-        val callStyle = NotificationCompat.CallStyle.forIncomingCall(
-            callerPerson,
-            declinePendingIntent,
-            acceptPendingIntent
-        )
-
         val isVideo = callType == "video"
-        val title = if (isVideo) "Incoming video call" else "Incoming call"
+        val callTypeLabel = if (isVideo) "Incoming video call" else "Incoming audio call"
+        val displayName = callerName.ifBlank { "Voryn User" }
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(callerName)
-            .setStyle(callStyle)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            .setContentIntent(fullScreenPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setAutoCancel(false)
             .setSound(null)
-            .build()
+
+        if (mode == IncomingNotificationMode.FULL_SCREEN_CALL_STYLE) {
+            val callerPerson = Person.Builder()
+                .setName(displayName)
+                .setImportant(true)
+                .build()
+
+            val callStyle = NotificationCompat.CallStyle.forIncomingCall(
+                callerPerson,
+                declinePendingIntent,
+                acceptPendingIntent
+            )
+
+            builder.setContentTitle(callTypeLabel)
+                .setContentText(displayName)
+                .setStyle(callStyle)
+                .setContentIntent(fullScreenPendingIntent)
+                .setFullScreenIntent(fullScreenPendingIntent, true)
+        } else {
+            // STANDARD_HEADS_UP: No CallStyle, No FullScreenIntent
+            builder.setContentTitle(displayName)
+                .setContentText(callTypeLabel)
+                .setContentIntent(acceptPendingIntent)
+                .addAction(0, "Decline", declinePendingIntent)
+                .addAction(0, "Accept", acceptPendingIntent)
+        }
+
+        val notification = builder.build()
 
         manager.notify(callId.hashCode(), notification)
         Log.d("VorynCall", "[INCOMING] notificationPosted")

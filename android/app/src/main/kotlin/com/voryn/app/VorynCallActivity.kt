@@ -88,7 +88,7 @@ class VorynCallActivity : FlutterActivity() {
         if (callId.isBlank()) return null
         val route = getInitialRoute()
         val engine = VorynCallEngineManager.getOrCreateEngine(this, callId, route)
-        Log.d("VorynCall", "[CALL_ENGINE] attach activity callId=$callId")
+        VorynCallEngineManager.onActivityAttached(this, callId)
         return engine
     }
 
@@ -106,7 +106,6 @@ class VorynCallActivity : FlutterActivity() {
 
     override fun onDestroy() {
         Log.d("VorynCall", "[CALL_ACTIVITY] onDestroy")
-        Log.d("VorynCall", "[CALL_ENGINE] activity detached")
         if (activeInstance == this) {
             activeInstance = null
         }
@@ -121,6 +120,9 @@ class VorynCallActivity : FlutterActivity() {
             Log.d("VorynCall", "[CALL_ACTIVITY] onDestroy: call is $state, retaining host ownership, engine, and proximity state")
         }
         super.onDestroy()
+        if (callId != null) {
+            VorynCallEngineManager.onActivityDetached(this, callId)
+        }
     }
 
     override fun getInitialRoute(): String {
@@ -153,7 +155,7 @@ class VorynCallActivity : FlutterActivity() {
                 if (callId != null) {
                     VorynCallStateManager.transition(this@VorynCallActivity, callId, VorynCallStateManager.CallState.TERMINAL)
                     VorynActiveCallService.stop(this@VorynCallActivity, callId, "terminal")
-                    VorynCallEngineManager.destroyEngine(callId)
+                    VorynCallEngineManager.requestTerminal(callId)
                     VorynCallHostManager.releaseCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
                 }
                 VorynProximityController.releaseAll("finish_call")
@@ -184,6 +186,12 @@ class VorynCallActivity : FlutterActivity() {
 
         if (action == "RETURN_TO_CALL" || launchData?.get("actionId") == "return_to_call") {
             Log.d("VorynCall", "[CALL_ACTIVITY] return to active callId=$callId")
+            val targetId = if (callId.isNotBlank()) callId else (currentCallId ?: "")
+            if (targetId.isNotBlank()) {
+                VorynCallStateManager.setCallPresentationState(this, targetId, VorynCallStateManager.PresentationState.FULLSCREEN)
+                val snapshot = VorynCallStateManager.getActiveCallSnapshot(this)
+                VorynCallPlatformBridge.notifyActiveCallStateChanged(snapshot)
+            }
             return
         }
 

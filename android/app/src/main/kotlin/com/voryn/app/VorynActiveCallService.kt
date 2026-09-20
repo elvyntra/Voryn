@@ -117,11 +117,7 @@ class VorynActiveCallService : Service() {
     ) {
         val km = getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
         val isLocked = km.isKeyguardLocked
-        val targetClass = if (isLocked || VorynCallHostManager.isCallOwnedByLockedCall(callId)) {
-            VorynCallActivity::class.java
-        } else {
-            MainActivity::class.java
-        }
+        val targetClass = VorynCallActivity::class.java
 
         // Return to call intent
         val returnIntent = Intent(this, targetClass).apply {

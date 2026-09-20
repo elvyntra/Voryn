@@ -18,11 +18,13 @@ import 'features/calling/active_audio_call_screen.dart';
 import 'features/calling/active_video_call_screen.dart';
 import 'features/calling/group_call_screen.dart';
 import 'features/calling/incoming_call_screen.dart';
+import 'features/calling/voryn_active_call_presentation_service.dart';
 import 'features/calling/voryn_call_history_service.dart';
 import 'features/calling/voryn_call_latency_tracker.dart';
 import 'features/calling/voryn_call_runtime_coordinator.dart';
 import 'features/calling/voryn_call_service.dart';
 import 'features/calling/voryn_livekit_service.dart';
+import 'features/calling/voryn_mini_call_bar.dart';
 import 'features/contacts/contacts_live_screen.dart';
 import 'features/recents/recents_live_screen.dart';
 import 'features/meetings/meetings_screen.dart';
@@ -416,11 +418,21 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
           '[BOOT] onTerminal from native service for callId=$callId type=$type',
         );
         VorynFirebaseMessaging.clearPendingIncomingCall(callId);
+        VorynActiveCallPresentationService.instance.clearSnapshot();
         VorynCallRuntimeCoordinator.forCall(
           callId,
         ).performTeardown(isLocalInitiator: false);
       },
+      onActiveCallStateChanged: (snapshot) {
+        debugPrint(
+          '[CALL_MINIMIZE] onActiveCallStateChanged in MainActivity: $snapshot',
+        );
+        VorynActiveCallPresentationService.instance.updateSnapshotFromMap(
+          snapshot,
+        );
+      },
     );
+    VorynActiveCallPresentationService.instance.refreshSnapshot();
 
     if (_auth.isAvailable) {
       _authSubscription = _auth.authStateChanges.listen((state) async {
@@ -457,6 +469,7 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     VorynPresenceService.onLifecycleChanged(state);
     if (state == AppLifecycleState.resumed) {
       _checkPendingIncomingCall();
+      VorynActiveCallPresentationService.instance.refreshSnapshot();
     }
   }
 
@@ -963,6 +976,7 @@ class _VorynShellState extends State<VorynShell> with WidgetsBindingObserver {
         setState(() => _isKeyguardLocked = locked);
       }
     });
+    VorynActiveCallPresentationService.instance.refreshSnapshot();
     _incomingCallTimer = Timer.periodic(
       const Duration(seconds: 3),
       (_) => _checkIncomingCall(),
@@ -978,6 +992,7 @@ class _VorynShellState extends State<VorynShell> with WidgetsBindingObserver {
           setState(() => _isKeyguardLocked = locked);
         }
       });
+      VorynActiveCallPresentationService.instance.refreshSnapshot();
       _checkIncomingCall();
     }
   }
@@ -1023,14 +1038,20 @@ class _VorynShellState extends State<VorynShell> with WidgetsBindingObserver {
     return Scaffold(
       backgroundColor: colors.background,
       body: widget.navigationShell,
-      bottomNavigationBar: VorynBottomNavigation(
-        currentIndex: widget.navigationShell.currentIndex,
-        onDestinationSelected: (index) {
-          widget.navigationShell.goBranch(
-            index,
-            initialLocation: index == widget.navigationShell.currentIndex,
-          );
-        },
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const VorynMiniCallBar(),
+          VorynBottomNavigation(
+            currentIndex: widget.navigationShell.currentIndex,
+            onDestinationSelected: (index) {
+              widget.navigationShell.goBranch(
+                index,
+                initialLocation: index == widget.navigationShell.currentIndex,
+              );
+            },
+          ),
+        ],
       ),
     );
   }

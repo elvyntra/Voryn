@@ -1,5 +1,8 @@
 package com.voryn.app
 
+import android.app.KeyguardManager
+import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import com.google.firebase.messaging.RemoteMessage
 import io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService
@@ -32,13 +35,53 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
                 val callType = data["call_type"] ?: data["callType"] ?: "audio"
                 val callerName = data["caller_name"] ?: data["callerName"] ?: "Voryn User"
 
-                IncomingCallNotificationManager.recordPendingIncomingCall(this, callId, callType, callerName)
-                IncomingCallNotificationManager.showIncomingCall(this, callId, callerName, callType)
+                val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                val keyguardLocked = km.isKeyguardLocked
+                val screenInteractive = pm.isInteractive
+                val appForeground = MainActivity.isAppInForeground
 
-                val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
-                val isKeyguardLocked = km?.isKeyguardLocked ?: false
-                if (isAppInForeground && !isKeyguardLocked) {
-                    MainActivity.notifyIncomingCall(callId, callerName, callType)
+                val presentation = when {
+                    keyguardLocked || !screenInteractive -> "NATIVE_LOCKSCREEN"
+                    appForeground -> "FLUTTER_FOREGROUND"
+                    else -> "NOTIFICATION"
+                }
+
+                Log.d(
+                    "VorynCall",
+                    "[INCOMING_PRESENTATION] keyguardLocked=$keyguardLocked screenInteractive=$screenInteractive " +
+                        "appForeground=$appForeground presentation=$presentation"
+                )
+
+                when (presentation) {
+                    "NATIVE_LOCKSCREEN" -> {
+                        IncomingCallNotificationManager.showIncomingCall(
+                            this,
+                            callId,
+                            callerName,
+                            callType,
+                            IncomingCallNotificationManager.IncomingNotificationMode.FULL_SCREEN_CALL_STYLE
+                        )
+                    }
+                    "FLUTTER_FOREGROUND" -> {
+                        IncomingCallNotificationManager.showIncomingCall(
+                            this,
+                            callId,
+                            callerName,
+                            callType,
+                            IncomingCallNotificationManager.IncomingNotificationMode.STANDARD_HEADS_UP
+                        )
+                        MainActivity.notifyIncomingCall(callId, callerName, callType)
+                    }
+                    "NOTIFICATION" -> {
+                        IncomingCallNotificationManager.showIncomingCall(
+                            this,
+                            callId,
+                            callerName,
+                            callType,
+                            IncomingCallNotificationManager.IncomingNotificationMode.STANDARD_HEADS_UP
+                        )
+                    }
                 }
             }
             "cancel_call", "call_cancelled", "call_ended", "call_completed", "call_declined", "call_missed" -> {
@@ -47,9 +90,7 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
                 IncomingCallNotificationManager.cancelIncomingCall(this, callId, "remote_terminal")
                 IncomingCallActivity.dismiss()
 
-                if (isAppInForeground) {
-                    MainActivity.notifyCallTerminal(callId, type)
-                }
+                MainActivity.notifyCallTerminal(callId, type)
             }
             else -> {
                 super.onMessageReceived(remoteMessage)

@@ -38,6 +38,26 @@ class MainActivity : FlutterActivity() {
         fun notifyCallTerminal(callId: String, type: String) {
             VorynCallPlatformBridge.notifyCallTerminal(callId, type)
         }
+
+        fun showMainAppDuringCall(context: Context) {
+            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            if (km.isKeyguardLocked) {
+                Log.d("VorynCall", "[CALL_MINIMIZE] keyguard is locked, not revealing main app")
+                return
+            }
+
+            val isReused = activeInstance != null
+            Log.d("VorynCall", "[CALL_MINIMIZE] showMainApp")
+            Log.d("VorynCall", "[CALL_MINIMIZE] existingMainActivity=$isReused")
+
+            val intent = Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            }
+            context.startActivity(intent)
+            Log.d("VorynCall", "[CALL_MINIMIZE] mainTaskBroughtToFront")
+        }
     }
 
     private var hasActiveCallPresentation: Boolean = false
@@ -116,19 +136,27 @@ class MainActivity : FlutterActivity() {
 
         val callState = VorynCallStateManager.getCurrentState(this)
         val activeCallId = VorynCallStateManager.getCurrentCallId(this)
+        val presentation = VorynCallStateManager.getPresentationState(this)
+
         if ((callState == VorynCallStateManager.CallState.ACTIVE || callState == VorynCallStateManager.CallState.ACCEPTING) &&
             !activeCallId.isNullOrBlank() &&
             (VorynCallHostManager.isCallOwnedByLockedCall(activeCallId) || VorynCallActivity.activeInstance != null)
         ) {
-            Log.d("VorynCall", "[CALL_RECOVERY] MainActivity state=$callState callId=$activeCallId -> foreground existing call host")
-            val returnIntent = Intent(this, VorynCallActivity::class.java).apply {
-                action = "RETURN_TO_CALL"
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                putExtra("call_id", activeCallId)
-                putExtra("callId", activeCallId)
+            if (presentation == VorynCallStateManager.PresentationState.FULLSCREEN) {
+                Log.d("VorynCall", "[CALL_RECOVERY] MainActivity state=$callState presentation=$presentation callId=$activeCallId -> foreground existing call host")
+                val returnIntent = Intent(this, VorynCallActivity::class.java).apply {
+                    action = "RETURN_TO_CALL"
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    putExtra("call_id", activeCallId)
+                    putExtra("callId", activeCallId)
+                }
+                startActivity(returnIntent)
+                return
+            } else {
+                Log.d("VorynCall", "[CALL_RECOVERY] MainActivity state=$callState presentation=$presentation callId=$activeCallId -> staying in MainActivity (minimized)")
+                val snapshot = VorynCallStateManager.getActiveCallSnapshot(this)
+                VorynCallPlatformBridge.notifyActiveCallStateChanged(snapshot)
             }
-            startActivity(returnIntent)
-            return
         }
 
         val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager

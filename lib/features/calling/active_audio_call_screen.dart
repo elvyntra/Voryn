@@ -399,7 +399,13 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   }
 
   Future<void> _performTeardown({bool isLocalInitiator = false}) {
-    _ending = true;
+    if (mounted) {
+      setState(() {
+        _ending = true;
+      });
+    } else {
+      _ending = true;
+    }
     _timer?.cancel();
     _detachRoomListener();
     return _coordinator.performTeardown(
@@ -436,6 +442,8 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
 
   void _minimize() async {
     if (LockScreenService.isCallHostApp) {
+      debugPrint('[CALL_MINIMIZE] minimizing active call task');
+      await LockScreenService.minimizeActiveCall();
       return;
     }
     final isLocked = await LockScreenService.isKeyguardLocked();
@@ -502,266 +510,271 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0F12),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top Bar
-            CallTopBar(
-              onMinimize: _minimize,
-              centerWidget: const SecurityBadge(label: 'SECURE CALL'),
-              onAddParticipant: () {
-                AddParticipantSheet.show(
-                  context,
-                  callId: widget.callId,
-                  onParticipantInvited: (vorynId) {
-                    debugPrint(
-                      '[CALL ${widget.callId}] participant invited: $vorynId',
-                    );
-                  },
-                );
-              },
-            ),
+      body: AbsorbPointer(
+        absorbing: _ending || _ended,
+        child: SafeArea(
+          child: Column(
+            children: [
+              // Top Bar
+              CallTopBar(
+                onMinimize: _minimize,
+                centerWidget: const SecurityBadge(label: 'SECURE CALL'),
+                onAddParticipant: () {
+                  AddParticipantSheet.show(
+                    context,
+                    callId: widget.callId,
+                    onParticipantInvited: (vorynId) {
+                      debugPrint(
+                        '[CALL ${widget.callId}] participant invited: $vorynId',
+                      );
+                    },
+                  );
+                },
+              ),
 
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return SingleChildScrollView(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: constraints.maxHeight,
-                      ),
-                      child: IntrinsicHeight(
-                        child: Column(
-                          children: [
-                            const Spacer(flex: 2),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return SingleChildScrollView(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight,
+                        ),
+                        child: IntrinsicHeight(
+                          child: Column(
+                            children: [
+                              const Spacer(flex: 2),
 
-                            // Caller Identity: Concentric Acoustic Rings & Avatar
-                            CallAvatarRings(
-                              initials: _user.initials,
-                              size: 130,
-                              badge: Container(
-                                width: 18,
-                                height: 18,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF22C55E),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: const Color(0xFF0D0F12),
-                                    width: 2.5,
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            const SizedBox(height: 24),
-
-                            // Primary Contact Name
-                            Text(
-                              primaryName,
-                              style: Theme.of(context).textTheme.headlineMedium
-                                  ?.copyWith(
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
-                                  ),
-                              textAlign: TextAlign.center,
-                            ),
-
-                            const SizedBox(height: 6),
-
-                            // Canonical Name / Voryn ID
-                            Text(
-                              secondaryText,
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(
-                                    fontSize: 15,
-                                    color: Colors.white60,
-                                  ),
-                              textAlign: TextAlign.center,
-                            ),
-
-                            const SizedBox(height: 18),
-
-                            // Call Duration & HD Status
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  width: 7,
-                                  height: 7,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFF22C55E),
+                              // Caller Identity: Concentric Acoustic Rings & Avatar
+                              CallAvatarRings(
+                                initials: _user.initials,
+                                size: 130,
+                                badge: Container(
+                                  width: 18,
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF22C55E),
                                     shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: const Color(0xFF0D0F12),
+                                      width: 2.5,
+                                    ),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                ValueListenableBuilder<Duration>(
-                                  valueListenable: _durationNotifier,
-                                  builder: (context, duration, _) {
-                                    return Text(
-                                      _loading
-                                          ? 'Connecting…'
-                                          : (_held
-                                                ? 'Call on hold'
-                                                : (!_isConnected
-                                                      ? _callStatusText
-                                                      : _formatTimer(
-                                                          duration,
-                                                        ))),
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.white,
-                                      ),
-                                    );
-                                  },
-                                ),
-                                const SizedBox(width: 10),
-                                const Text(
-                                  'HD VOICE',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white38,
-                                    letterSpacing: 0.8,
-                                  ),
-                                ),
-                              ],
-                            ),
-
-                            const SizedBox(height: 16),
-
-                            // Restrained Acoustic Waveform
-                            CallWaveform(
-                              isActive: !_held && !_muted && !_loading,
-                              color: const Color(0xFFA78BFA),
-                            ),
-
-                            const Spacer(flex: 3),
-
-                            // Secondary Message trigger button
-                            TextButton.icon(
-                              onPressed: _openMessageSheet,
-                              icon: const Icon(
-                                Icons.chat_bubble_outline_rounded,
-                                size: 18,
-                                color: Colors.white70,
                               ),
-                              label: const Text(
-                                'Send message',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                ),
+
+                              const SizedBox(height: 24),
+
+                              // Primary Contact Name
+                              Text(
+                                primaryName,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .headlineMedium
+                                    ?.copyWith(
+                                      fontSize: 32,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                textAlign: TextAlign.center,
                               ),
-                            ),
 
-                            const SizedBox(height: 10),
+                              const SizedBox(height: 6),
 
-                            // Floating 2x3 Control Tray
-                            CallControlTray(
-                              row1: [
-                                CallControlButton(
-                                  icon: Icons.volume_up_rounded,
-                                  label: 'Speaker',
-                                  isActive: _speakerOn,
-                                  activeColor: colors.accent,
-                                  onTap: _toggleSpeaker,
-                                ),
-                                CallControlButton(
-                                  icon: Icons.videocam_outlined,
-                                  label: 'Video',
-                                  onTap: _switchToVideo,
-                                ),
-                                CallControlButton(
-                                  icon: _muted
-                                      ? Icons.mic_off_rounded
-                                      : Icons.mic_rounded,
-                                  label: _muted ? 'Muted' : 'Mute',
-                                  isActive: _muted,
-                                  activeColor: const Color(0xFFDC2626),
-                                  onTap: _toggleMute,
-                                ),
-                              ],
-                              row2: [
-                                CallControlButton(
-                                  icon: _held
-                                      ? Icons.play_arrow_rounded
-                                      : Icons.pause_rounded,
-                                  label: _held ? 'Resume' : 'Hold',
-                                  isActive: _held,
-                                  activeColor: colors.accent,
-                                  onTap: _toggleHold,
-                                ),
-                                CallControlButton(
-                                  icon: Icons.screen_share_outlined,
-                                  label: 'Share',
-                                  isActive: _screenSharing,
-                                  activeColor: colors.accent,
-                                  onTap: _toggleShare,
-                                ),
-                                CallControlButton(
-                                  icon: Icons.call_end_rounded,
-                                  label: 'End',
-                                  isDestructive: true,
-                                  onTap: _endCall,
-                                ),
-                              ],
-                            ),
-
-                            const SizedBox(height: 16),
-
-                            // Network Quality Status Line
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 28,
+                              // Canonical Name / Voryn ID
+                              Text(
+                                secondaryText,
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      fontSize: 15,
+                                      color: Colors.white60,
+                                    ),
+                                textAlign: TextAlign.center,
                               ),
-                              child: Row(
+
+                              const SizedBox(height: 18),
+
+                              // Call Duration & HD Status
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   Container(
-                                    width: 6,
-                                    height: 6,
+                                    width: 7,
+                                    height: 7,
                                     decoration: const BoxDecoration(
                                       color: Color(0xFF22C55E),
                                       shape: BoxShape.circle,
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
+                                  const SizedBox(width: 8),
+                                  ValueListenableBuilder<Duration>(
+                                    valueListenable: _durationNotifier,
+                                    builder: (context, duration, _) {
+                                      return Text(
+                                        _loading
+                                            ? 'Connecting…'
+                                            : (_held
+                                                  ? 'Call on hold'
+                                                  : (!_isConnected
+                                                        ? _callStatusText
+                                                        : _formatTimer(
+                                                            duration,
+                                                          ))),
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(width: 10),
                                   const Text(
-                                    'Good connection',
+                                    'HD VOICE',
                                     style: TextStyle(
                                       fontSize: 11,
-                                      color: Colors.white54,
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  const Icon(
-                                    Icons.shield_outlined,
-                                    size: 14,
-                                    color: Colors.white54,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  const Text(
-                                    'Secure',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.white54,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white38,
+                                      letterSpacing: 0.8,
                                     ),
                                   ),
                                 ],
                               ),
-                            ),
 
-                            const SizedBox(height: 12),
-                          ],
+                              const SizedBox(height: 16),
+
+                              // Restrained Acoustic Waveform
+                              CallWaveform(
+                                isActive: !_held && !_muted && !_loading,
+                                color: const Color(0xFFA78BFA),
+                              ),
+
+                              const Spacer(flex: 3),
+
+                              // Secondary Message trigger button
+                              TextButton.icon(
+                                onPressed: _openMessageSheet,
+                                icon: const Icon(
+                                  Icons.chat_bubble_outline_rounded,
+                                  size: 18,
+                                  color: Colors.white70,
+                                ),
+                                label: const Text(
+                                  'Send message',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 10),
+
+                              // Floating 2x3 Control Tray
+                              CallControlTray(
+                                row1: [
+                                  CallControlButton(
+                                    icon: Icons.volume_up_rounded,
+                                    label: 'Speaker',
+                                    isActive: _speakerOn,
+                                    activeColor: colors.accent,
+                                    onTap: _toggleSpeaker,
+                                  ),
+                                  CallControlButton(
+                                    icon: Icons.videocam_outlined,
+                                    label: 'Video',
+                                    onTap: _switchToVideo,
+                                  ),
+                                  CallControlButton(
+                                    icon: _muted
+                                        ? Icons.mic_off_rounded
+                                        : Icons.mic_rounded,
+                                    label: _muted ? 'Muted' : 'Mute',
+                                    isActive: _muted,
+                                    activeColor: const Color(0xFFDC2626),
+                                    onTap: _toggleMute,
+                                  ),
+                                ],
+                                row2: [
+                                  CallControlButton(
+                                    icon: _held
+                                        ? Icons.play_arrow_rounded
+                                        : Icons.pause_rounded,
+                                    label: _held ? 'Resume' : 'Hold',
+                                    isActive: _held,
+                                    activeColor: colors.accent,
+                                    onTap: _toggleHold,
+                                  ),
+                                  CallControlButton(
+                                    icon: Icons.screen_share_outlined,
+                                    label: 'Share',
+                                    isActive: _screenSharing,
+                                    activeColor: colors.accent,
+                                    onTap: _toggleShare,
+                                  ),
+                                  CallControlButton(
+                                    icon: Icons.call_end_rounded,
+                                    label: 'End',
+                                    isDestructive: true,
+                                    onTap: _endCall,
+                                  ),
+                                ],
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Network Quality Status Line
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 28,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF22C55E),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    const Text(
+                                      'Good connection',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.white54,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    const Icon(
+                                      Icons.shield_outlined,
+                                      size: 14,
+                                      color: Colors.white54,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Text(
+                                      'Secure',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.white54,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              const SizedBox(height: 12),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

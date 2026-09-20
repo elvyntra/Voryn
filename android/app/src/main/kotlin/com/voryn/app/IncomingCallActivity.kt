@@ -185,14 +185,10 @@ class IncomingCallActivity : Activity() {
         val isLocked = km.isKeyguardLocked
         Log.d("VorynCall", "[LOCK_ACCEPT] keyguardLocked=$isLocked")
 
-        if (isLocked) {
-            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
-            Log.d("VorynCall", "[LOCK_ACCEPT] CallActivity launch callId=$callId")
-        } else {
-            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.MAIN)
-        }
+        VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
+        Log.d("VorynCall", "[LOCK_ACCEPT] CallActivity launch callId=$callId keyguardLocked=$isLocked")
 
-        val targetClass = if (isLocked) VorynCallActivity::class.java else MainActivity::class.java
+        val targetClass = VorynCallActivity::class.java
 
         val acceptIntent = Intent(this, targetClass).apply {
             action = "ACCEPT_CALL"

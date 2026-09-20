@@ -465,7 +465,11 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   }
 
   Future<void> _performTeardown({bool isLocalInitiator = false}) {
-    _ending = true;
+    if (mounted) {
+      setState(() => _ending = true);
+    } else {
+      _ending = true;
+    }
     _timer?.cancel();
     _detachRoomListener();
     return _coordinator.performTeardown(
@@ -502,6 +506,8 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
   void _minimize() async {
     if (LockScreenService.isCallHostApp) {
+      debugPrint('[CALL_MINIMIZE] minimizing active call task');
+      await LockScreenService.minimizeActiveCall();
       return;
     }
     final isLocked = await LockScreenService.isKeyguardLocked();
@@ -557,282 +563,285 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Dominant Remote Video Stage
-          if (remoteTrack != null)
-            livekit.VideoTrackRenderer(
-              remoteTrack,
-              key: ValueKey(remoteTrack.sid ?? remoteTrack.hashCode),
-              fit: livekit.VideoViewFit.cover,
-            )
-          else
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF1A1D24), Color(0xFF0C0E12)],
+      body: AbsorbPointer(
+        absorbing: _ending || _ended,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Dominant Remote Video Stage
+            if (remoteTrack != null)
+              livekit.VideoTrackRenderer(
+                remoteTrack,
+                key: ValueKey(remoteTrack.sid ?? remoteTrack.hashCode),
+                fit: livekit.VideoViewFit.cover,
+              )
+            else
+              Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xFF1A1D24), Color(0xFF0C0E12)],
+                  ),
                 ),
-              ),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CallAvatarRings(initials: _user.initials, size: 110),
-                    const SizedBox(height: 20),
-                    Text(
-                      primaryName,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _loading ? 'Connecting video…' : 'Camera off',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.white54,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Top Gradient Scrim for Overlay Visibility
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            height: 140,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.8),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          // Bottom Gradient Scrim for Controls Visibility
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 220,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.85),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          // Top Overlay: CallTopBar + Identity & Timer
-          SafeArea(
-            child: Column(
-              children: [
-                CallTopBar(
-                  onMinimize: _minimize,
-                  centerWidget: Column(
+                child: Center(
+                  child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            primaryName,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 5,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: colors.accent.withValues(alpha: 0.3),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              'HD',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
+                      CallAvatarRings(initials: _user.initials, size: 110),
+                      const SizedBox(height: 20),
+                      Text(
+                        primaryName,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _loading ? 'Connecting video…' : 'Camera off',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.white54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Top Gradient Scrim for Overlay Visibility
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: 140,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.8),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Bottom Gradient Scrim for Controls Visibility
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 220,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.85),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Top Overlay: CallTopBar + Identity & Timer
+            SafeArea(
+              child: Column(
+                children: [
+                  CallTopBar(
+                    onMinimize: _minimize,
+                    centerWidget: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              primaryName,
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
                                 color: Colors.white,
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF22C55E),
-                              shape: BoxShape.circle,
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colors.accent.withValues(alpha: 0.3),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'HD',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF22C55E),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            ValueListenableBuilder<Duration>(
+                              valueListenable: _durationNotifier,
+                              builder: (context, duration, _) {
+                                return Text(
+                                  _loading
+                                      ? 'Connecting…'
+                                      : (!_isConnected
+                                            ? _callStatusText
+                                            : _formatTimer(duration)),
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white70,
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    onAddParticipant: () {
+                      AddParticipantSheet.show(
+                        context,
+                        callId: widget.callId,
+                        onParticipantInvited: (vorynId) {
+                          debugPrint(
+                            '[CALL ${widget.callId}] participant invited: $vorynId',
+                          );
+                        },
+                      );
+                    },
+                  ),
+
+                  // Screen Share Banner (if screen sharing active)
+                  ValueListenableBuilder<bool>(
+                    valueListenable: _screenSharingNotifier,
+                    builder: (context, sharing, _) {
+                      if (!sharing) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: ScreenShareBanner(onStopSharing: _toggleShare),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            // Floating Picture-in-Picture Local Video Preview
+            ListenableBuilder(
+              listenable: Listenable.merge([
+                _cameraEnabledNotifier,
+                _mutedNotifier,
+              ]),
+              builder: (context, _) {
+                return VideoPip(
+                  localTrack: localTrack,
+                  isMuted: _mutedNotifier.value,
+                  isCameraEnabled: _cameraEnabledNotifier.value,
+                  userInitials: 'YOU',
+                );
+              },
+            ),
+
+            // Bottom Controls Overlay
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Floating 2x3 Control Tray
+                      CallControlTray(
+                        row1: [
+                          ValueListenableBuilder<bool>(
+                            valueListenable: _mutedNotifier,
+                            builder: (context, muted, _) => CallControlButton(
+                              icon: muted
+                                  ? Icons.mic_off_rounded
+                                  : Icons.mic_rounded,
+                              label: muted ? 'Muted' : 'Mute',
+                              isDestructive: muted,
+                              onTap: _toggleMute,
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          ValueListenableBuilder<Duration>(
-                            valueListenable: _durationNotifier,
-                            builder: (context, duration, _) {
-                              return Text(
-                                _loading
-                                    ? 'Connecting…'
-                                    : (!_isConnected
-                                          ? _callStatusText
-                                          : _formatTimer(duration)),
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.white70,
-                                ),
-                              );
-                            },
+                          ValueListenableBuilder<bool>(
+                            valueListenable: _cameraEnabledNotifier,
+                            builder: (context, enabled, _) => CallControlButton(
+                              icon: enabled
+                                  ? Icons.videocam_rounded
+                                  : Icons.videocam_off_rounded,
+                              label: enabled ? 'Camera' : 'Camera off',
+                              isActive: enabled,
+                              activeColor: colors.surfaceRaised,
+                              onTap: _toggleCamera,
+                            ),
+                          ),
+                          CallControlButton(
+                            icon: Icons.flip_camera_android_rounded,
+                            label: 'Flip',
+                            onTap: _flipCamera,
+                          ),
+                        ],
+                        row2: [
+                          CallControlButton(
+                            icon: Icons.volume_up_rounded,
+                            label: 'Speaker',
+                            onTap: _openAudioRoutes,
+                          ),
+                          ValueListenableBuilder<bool>(
+                            valueListenable: _screenSharingNotifier,
+                            builder: (context, sharing, _) => CallControlButton(
+                              icon: Icons.screen_share_outlined,
+                              label: sharing ? 'Sharing' : 'Share',
+                              isActive: sharing,
+                              activeColor: colors.accent,
+                              onTap: _toggleShare,
+                            ),
+                          ),
+                          CallControlButton(
+                            icon: Icons.call_end_rounded,
+                            label: 'End',
+                            isDestructive: true,
+                            onTap: _endCall,
                           ),
                         ],
                       ),
                     ],
                   ),
-                  onAddParticipant: () {
-                    AddParticipantSheet.show(
-                      context,
-                      callId: widget.callId,
-                      onParticipantInvited: (vorynId) {
-                        debugPrint(
-                          '[CALL ${widget.callId}] participant invited: $vorynId',
-                        );
-                      },
-                    );
-                  },
-                ),
-
-                // Screen Share Banner (if screen sharing active)
-                ValueListenableBuilder<bool>(
-                  valueListenable: _screenSharingNotifier,
-                  builder: (context, sharing, _) {
-                    if (!sharing) return const SizedBox.shrink();
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: ScreenShareBanner(onStopSharing: _toggleShare),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-
-          // Floating Picture-in-Picture Local Video Preview
-          ListenableBuilder(
-            listenable: Listenable.merge([
-              _cameraEnabledNotifier,
-              _mutedNotifier,
-            ]),
-            builder: (context, _) {
-              return VideoPip(
-                localTrack: localTrack,
-                isMuted: _mutedNotifier.value,
-                isCameraEnabled: _cameraEnabledNotifier.value,
-                userInitials: 'YOU',
-              );
-            },
-          ),
-
-          // Bottom Controls Overlay
-          SafeArea(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Floating 2x3 Control Tray
-                    CallControlTray(
-                      row1: [
-                        ValueListenableBuilder<bool>(
-                          valueListenable: _mutedNotifier,
-                          builder: (context, muted, _) => CallControlButton(
-                            icon: muted
-                                ? Icons.mic_off_rounded
-                                : Icons.mic_rounded,
-                            label: muted ? 'Muted' : 'Mute',
-                            isDestructive: muted,
-                            onTap: _toggleMute,
-                          ),
-                        ),
-                        ValueListenableBuilder<bool>(
-                          valueListenable: _cameraEnabledNotifier,
-                          builder: (context, enabled, _) => CallControlButton(
-                            icon: enabled
-                                ? Icons.videocam_rounded
-                                : Icons.videocam_off_rounded,
-                            label: enabled ? 'Camera' : 'Camera off',
-                            isActive: enabled,
-                            activeColor: colors.surfaceRaised,
-                            onTap: _toggleCamera,
-                          ),
-                        ),
-                        CallControlButton(
-                          icon: Icons.flip_camera_android_rounded,
-                          label: 'Flip',
-                          onTap: _flipCamera,
-                        ),
-                      ],
-                      row2: [
-                        CallControlButton(
-                          icon: Icons.volume_up_rounded,
-                          label: 'Speaker',
-                          onTap: _openAudioRoutes,
-                        ),
-                        ValueListenableBuilder<bool>(
-                          valueListenable: _screenSharingNotifier,
-                          builder: (context, sharing, _) => CallControlButton(
-                            icon: Icons.screen_share_outlined,
-                            label: sharing ? 'Sharing' : 'Share',
-                            isActive: sharing,
-                            activeColor: colors.accent,
-                            onTap: _toggleShare,
-                          ),
-                        ),
-                        CallControlButton(
-                          icon: Icons.call_end_rounded,
-                          label: 'End',
-                          isDestructive: true,
-                          onTap: _endCall,
-                        ),
-                      ],
-                    ),
-                  ],
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

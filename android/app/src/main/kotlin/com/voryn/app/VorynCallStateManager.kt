@@ -11,9 +11,10 @@ object VorynCallStateManager {
     private const val KEY_CALL_STATE = "call_state"
     private const val KEY_CALL_TYPE = "call_type"
     private const val KEY_CALLER_NAME = "caller_name"
+    private const val KEY_HOST = "host"
     private const val KEY_RECEIVED_AT = "received_at"
     private const val KEY_STARTED_AT = "started_at"
-    private const val KEY_HOST = "host"
+    private const val KEY_PRESENTATION_STATE = "presentation_state"
 
     enum class CallState {
         NONE,
@@ -24,8 +25,16 @@ object VorynCallStateManager {
         TERMINAL
     }
 
+    enum class PresentationState {
+        FULLSCREEN,
+        MINIMIZED
+    }
+
     @Volatile
     private var inMemoryState: CallState = CallState.NONE
+
+    @Volatile
+    private var inMemoryPresentation: PresentationState = PresentationState.FULLSCREEN
 
     @Volatile
     private var inMemoryCallId: String? = null
@@ -111,12 +120,14 @@ object VorynCallStateManager {
         host: String = "LOCKED_CALL"
     ) {
         inMemoryState = CallState.ACTIVE
+        inMemoryPresentation = PresentationState.FULLSCREEN
         inMemoryCallId = callId
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_CALL_ID, callId)
             .putString(KEY_CALL_STATE, CallState.ACTIVE.name)
+            .putString(KEY_PRESENTATION_STATE, PresentationState.FULLSCREEN.name)
             .putString(KEY_CALLER_NAME, callerName)
             .putString(KEY_CALL_TYPE, callType)
             .putString(KEY_HOST, host)
@@ -127,11 +138,55 @@ object VorynCallStateManager {
     }
 
     @Synchronized
+    fun setCallPresentationState(context: Context, callId: String, presentation: PresentationState) {
+        inMemoryPresentation = presentation
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_PRESENTATION_STATE, presentation.name)
+            .apply()
+        Log.d(TAG, "[CALL_STATE] presentation=$presentation callId=$callId")
+    }
+
+    @Synchronized
+    fun getPresentationState(context: Context): PresentationState {
+        if (inMemoryPresentation != PresentationState.FULLSCREEN) return inMemoryPresentation
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val presStr = prefs.getString(KEY_PRESENTATION_STATE, null) ?: return PresentationState.FULLSCREEN
+        inMemoryPresentation = try {
+            PresentationState.valueOf(presStr)
+        } catch (_: Exception) {
+            PresentationState.FULLSCREEN
+        }
+        return inMemoryPresentation
+    }
+
+    @Synchronized
+    fun getActiveCallSnapshot(context: Context): Map<String, Any>? {
+        val state = getCurrentState(context)
+        if (state != CallState.ACTIVE && state != CallState.ACCEPTING) {
+            return null
+        }
+
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val callId = prefs.getString(KEY_CALL_ID, null) ?: inMemoryCallId ?: return null
+        val presentation = getPresentationState(context)
+        return mapOf(
+            "callId" to callId,
+            "state" to state.name,
+            "presentation" to presentation.name,
+            "callType" to (prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"),
+            "displayName" to (prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"),
+            "startedAt" to prefs.getLong(KEY_STARTED_AT, 0L)
+        )
+    }
+
+    @Synchronized
     fun transition(context: Context, callId: String, newState: CallState) {
         val oldState = inMemoryState
         inMemoryState = newState
         if (newState == CallState.TERMINAL || newState == CallState.NONE) {
             inMemoryCallId = null
+            inMemoryPresentation = PresentationState.FULLSCREEN
         } else {
             inMemoryCallId = callId
         }
@@ -196,6 +251,7 @@ object VorynCallStateManager {
                 Log.d(TAG, "[CALL_STATE] clear() ignored because callId=$callId is $state")
                 return
             }
+            inMemoryPresentation = PresentationState.FULLSCREEN
             transition(context, callId ?: currentId ?: "", CallState.TERMINAL)
         }
     }

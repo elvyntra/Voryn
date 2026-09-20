@@ -37,14 +37,10 @@ class IncomingCallActionReceiver : BroadcastReceiver() {
             val isLocked = km.isKeyguardLocked
             Log.d("VorynCall", "[LOCK_ACCEPT] keyguardLocked=$isLocked")
 
-            if (isLocked) {
-                VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
-                Log.d("VorynCall", "[LOCK_ACCEPT] CallActivity launch callId=$callId")
-            } else {
-                VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.MAIN)
-            }
+            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
+            Log.d("VorynCall", "[ACCEPT] CallActivity launch callId=$callId keyguardLocked=$isLocked")
 
-            val targetClass = if (isLocked) VorynCallActivity::class.java else MainActivity::class.java
+            val targetClass = VorynCallActivity::class.java
 
             val callType = intent.getStringExtra("call_type") ?: intent.getStringExtra("callType") ?: "audio"
             val callerName = intent.getStringExtra("caller_name") ?: intent.getStringExtra("callerName") ?: "Voryn User"

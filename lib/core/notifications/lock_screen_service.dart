@@ -125,6 +125,7 @@ class LockScreenService {
     void Function(String callId)? onDeclined,
     void Function(Map<String, String> data)? onIncoming,
     void Function(String callId, String type)? onTerminal,
+    void Function(Map<String, dynamic>? snapshot)? onActiveCallStateChanged,
   }) {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onCallLaunchIntent') {
@@ -156,6 +157,12 @@ class LockScreenService {
           final type = arguments['type']?.toString() ?? '';
           onTerminal?.call(callId, type);
         }
+      } else if (call.method == 'onActiveCallStateChanged') {
+        final arguments = call.arguments;
+        final snapshot = arguments is Map
+            ? Map<String, dynamic>.from(arguments)
+            : null;
+        onActiveCallStateChanged?.call(snapshot);
       }
     });
   }
@@ -192,6 +199,46 @@ class LockScreenService {
         'callId': callId,
         'callerName': callerName ?? 'Voryn User',
         'callType': callType ?? 'audio',
+      });
+    } catch (_) {}
+  }
+
+  /// Signals native engine manager that Dart/LiveKit teardown is complete.
+  static Future<void> markDartTeardownComplete(String callId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('markDartTeardownComplete', {
+        'callId': callId,
+      });
+    } catch (_) {}
+  }
+
+  /// Minimizes VorynCallActivity to the background while keeping the call active.
+  static Future<void> minimizeActiveCall() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('minimizeActiveCall');
+    } catch (_) {}
+  }
+
+  /// Claims and launches VorynCallActivity for an incoming call answered in foreground.
+  static Future<void> acceptIncomingCall({
+    required String callId,
+    required String callType,
+    required String callerName,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('acceptIncomingCall', {
+        'callId': callId,
+        'callType': callType,
+        'callerName': callerName,
       });
     } catch (_) {}
   }
@@ -284,6 +331,33 @@ class LockScreenService {
         'mediaMode': mediaMode,
         'held': isHeld,
         'ending': isEnding,
+      });
+    } catch (_) {}
+  }
+
+  /// Retrieves active call UI snapshot for mini-call bar presentation.
+  static Future<Map<String, dynamic>?> getActiveCallSnapshot() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return null;
+    }
+    try {
+      final res = await _channel.invokeMapMethod<String, dynamic>(
+        'getActiveCallSnapshot',
+      );
+      return res;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns to existing fullscreen active call Activity.
+  static Future<void> returnToActiveCall(String callId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('returnToActiveCall', {
+        'callId': callId,
       });
     } catch (_) {}
   }
