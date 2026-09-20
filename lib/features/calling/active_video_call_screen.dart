@@ -58,21 +58,42 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   bool _ending = false;
   bool _ended = false;
   bool _listenerAttached = false;
+  bool _markedActive = false;
+
+  void _notifyCallActive() {
+    if (_markedActive) return;
+    _markedActive = true;
+    unawaited(
+      LockScreenService.markCallActive(
+        callId: widget.callId,
+        callerName: _user.name,
+        callType: 'video',
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+    debugPrint('[CALL_ROUTE] active route initState');
     LockScreenService.cancelNativeIncomingCall(widget.callId, reason: 'accept');
     _coordinator = VorynCallRuntimeCoordinator.forCall(widget.callId);
     _latencyTracker =
         VorynCallLatencyTracker.get(widget.callId) ??
         VorynCallLatencyTracker.start(callId: widget.callId);
     unawaited(_latencyTracker?.stage('active_route_mounted'));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint('[CALL_ROUTE] active route mounted');
+    });
 
     _coordinator.attachScreen(
       onStatusChanged: _handleRealtimeStatus,
       onRouteExit: _handleRouteExit,
     );
+
+    debugPrint('[LOCKSCREEN] accept');
+    debugPrint('[LOCKSCREEN] activeCallRouteReady');
+    unawaited(LockScreenService.setCallPresentationVisible(true));
 
     _user =
         widget.user ??
@@ -92,6 +113,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   }
 
   Future<void> _start() async {
+    debugPrint('[CALL_BOOTSTRAP] start');
     if (widget.user == null) {
       try {
         final item = await const VorynCallHistoryService()
@@ -126,14 +148,23 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       _coordinator.session = _session;
       _isConnected = true;
       await _session?.setCameraEnabled(true);
+      _notifyCallActive();
       _attachRoomListener();
       _startTimer();
       unawaited(_latencyTracker?.stage('call_connected_ui'));
+      unawaited(
+        LockScreenService.isKeyguardLocked().then((isLocked) {
+          debugPrint(
+            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+          );
+        }),
+      );
       if (mounted) setState(() => _loading = false);
       return;
     }
 
     try {
+      debugPrint('[CALL_BOOTSTRAP] LiveKit connect start');
       _session = await _coordinator.connect(
         video: true,
         latencyTracker: _latencyTracker,
@@ -141,11 +172,14 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       _attachRoomListener();
       if (_session!.room.remoteParticipants.isNotEmpty) {
         _isConnected = true;
+        _notifyCallActive();
         _startTimer();
         await _latencyTracker?.stage('backend_accept_start');
         await const VorynCallService().setConnected(widget.callId);
         await _latencyTracker?.stage('backend_accept_done');
         await _latencyTracker?.stage('call_connected_ui');
+        final isLocked = await LockScreenService.isKeyguardLocked();
+        debugPrint('[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked');
       } else {
         _callStatusText = 'Ringing…';
       }
@@ -153,8 +187,11 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       debugPrint('[CALL ${widget.callId}] connect fallback / mock mode: $e');
       _isConnected = true;
       _callStatusText = 'Connected';
+      _notifyCallActive();
       _startTimer();
       await _latencyTracker?.stage('call_connected_ui');
+      final isLocked = await LockScreenService.isKeyguardLocked();
+      debugPrint('[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked');
     }
     if (mounted) {
       setState(() => _loading = false);
@@ -164,9 +201,17 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   void _handleRealtimeStatus(String status) {
     if (status == 'connected' && !_isConnected) {
       _isConnected = true;
+      _notifyCallActive();
       _callStatusText = '';
       _startTimer();
       unawaited(_latencyTracker?.stage('call_connected_ui'));
+      unawaited(
+        LockScreenService.isKeyguardLocked().then((isLocked) {
+          debugPrint(
+            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+          );
+        }),
+      );
       if (mounted) setState(() {});
     } else if (status == 'ringing' && !_isConnected) {
       _callStatusText = 'Ringing…';
@@ -204,9 +249,23 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
     if (room.remoteParticipants.isNotEmpty && !_isConnected) {
       _isConnected = true;
+      _notifyCallActive();
       _callStatusText = '';
       _startTimer();
-      unawaited(const VorynCallService().setConnected(widget.callId));
+      unawaited(_latencyTracker?.stage('backend_accept_start'));
+      unawaited(
+        const VorynCallService().setConnected(widget.callId).then((_) {
+          _latencyTracker?.stage('backend_accept_done');
+        }),
+      );
+      unawaited(_latencyTracker?.stage('call_connected_ui'));
+      unawaited(
+        LockScreenService.isKeyguardLocked().then((isLocked) {
+          debugPrint(
+            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+          );
+        }),
+      );
       if (mounted) setState(() {});
     }
 
@@ -363,9 +422,34 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
                 if (ctx.mounted) Navigator.pop(ctx);
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.call_rounded, color: Colors.white),
+              title: const Text(
+                'Switch to Audio Call',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () {
+                if (ctx.mounted) Navigator.pop(ctx);
+                _switchToAudio();
+              },
+            ),
           ],
         ),
       ),
+    );
+  }
+
+  void _switchToAudio() async {
+    _coordinator.isTransitioning = true;
+    try {
+      await _session?.setCameraEnabled(false);
+    } catch (_) {}
+    _detachRoomListener();
+    _coordinator.detachScreen();
+    if (!mounted) return;
+    context.pushReplacement(
+      '/active-audio-call/${widget.callId}',
+      extra: {'user': _user, 'session': _session},
     );
   }
 
@@ -396,6 +480,14 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     _timer?.cancel();
     _detachRoomListener();
     if (!mounted) return;
+    if (LockScreenService.isCallHostApp) {
+      await LockScreenService.moveCallTaskBehindKeyguard();
+      return;
+    }
+    final isLocked = await LockScreenService.isKeyguardLocked();
+    if (isLocked || !mounted) {
+      return;
+    }
     if (context.canPop()) {
       context.pop();
     } else {
@@ -409,6 +501,9 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   }
 
   void _minimize() async {
+    if (LockScreenService.isCallHostApp) {
+      return;
+    }
     final isLocked = await LockScreenService.isKeyguardLocked();
     if (isLocked) {
       return;

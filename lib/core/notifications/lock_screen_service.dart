@@ -6,6 +6,25 @@ class LockScreenService {
 
   static const _channel = MethodChannel('com.voryn.app/lock_screen');
 
+  /// Set to true when running inside the isolated VorynCallActivity (callMain entrypoint).
+  static bool isCallHostApp = false;
+
+  /// Checks whether a call is currently owned by another host Activity (e.g. VorynCallActivity).
+  static Future<bool> isCallOwnedByOtherHost(String callId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      final owned = await _channel.invokeMethod<bool>(
+        'isCallOwnedByOtherHost',
+        {'callId': callId},
+      );
+      return owned ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Checks if the device's secure keyguard is currently locked.
   static Future<bool> isKeyguardLocked() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -104,6 +123,8 @@ class LockScreenService {
   static void setCallLaunchListener(
     void Function(Map<String, String> data) listener, {
     void Function(String callId)? onDeclined,
+    void Function(Map<String, String> data)? onIncoming,
+    void Function(String callId, String type)? onTerminal,
   }) {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onCallLaunchIntent') {
@@ -119,6 +140,21 @@ class LockScreenService {
         if (arguments is Map) {
           final callId = arguments['callId']?.toString() ?? '';
           onDeclined?.call(callId);
+        }
+      } else if (call.method == 'onIncomingCall') {
+        final arguments = call.arguments;
+        if (arguments is Map) {
+          final data = arguments.map(
+            (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+          );
+          onIncoming?.call(data);
+        }
+      } else if (call.method == 'onCallTerminal') {
+        final arguments = call.arguments;
+        if (arguments is Map) {
+          final callId = arguments['callId']?.toString() ?? '';
+          final type = arguments['type']?.toString() ?? '';
+          onTerminal?.call(callId, type);
         }
       }
     });
@@ -138,6 +174,24 @@ class LockScreenService {
         'callId': callId,
         'callerName': callerName,
         'callType': callType,
+      });
+    } catch (_) {}
+  }
+
+  /// Transitions native call session state to ACTIVE and starts the ongoing foreground notification.
+  static Future<void> markCallActive({
+    required String callId,
+    String? callerName,
+    String? callType,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('markCallActive', {
+        'callId': callId,
+        'callerName': callerName ?? 'Voryn User',
+        'callType': callType ?? 'audio',
       });
     } catch (_) {}
   }
@@ -194,6 +248,43 @@ class LockScreenService {
     }
     try {
       await _channel.invokeMethod<void>('moveCallTaskBehindKeyguard');
+    } catch (_) {}
+  }
+
+  /// Checks if proximity screen-off wake lock is supported on this device.
+  static Future<bool> isProximitySupported() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      final supported = await _channel.invokeMethod<bool>(
+        'isProximitySupported',
+      );
+      return supported ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Updates centralized call state for proximity sensor wake lock evaluation.
+  static Future<void> updateProximityState({
+    required String callId,
+    required bool isConnected,
+    required String mediaMode,
+    required bool isHeld,
+    required bool isEnding,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('updateProximityState', {
+        'callId': callId,
+        'connected': isConnected,
+        'mediaMode': mediaMode,
+        'held': isHeld,
+        'ending': isEnding,
+      });
     } catch (_) {}
   }
 }

@@ -20,6 +20,7 @@ import 'features/calling/group_call_screen.dart';
 import 'features/calling/incoming_call_screen.dart';
 import 'features/calling/voryn_call_history_service.dart';
 import 'features/calling/voryn_call_latency_tracker.dart';
+import 'features/calling/voryn_call_runtime_coordinator.dart';
 import 'features/calling/voryn_call_service.dart';
 import 'features/calling/voryn_livekit_service.dart';
 import 'features/contacts/contacts_live_screen.dart';
@@ -48,11 +49,29 @@ class AppLaunchConfig {
 }
 
 Future<AppLaunchConfig> resolveAppLaunchConfig() async {
+  final defaultRoute =
+      WidgetsBinding.instance.platformDispatcher.defaultRouteName;
+  debugPrint('[CALL_ROUTE] defaultRouteName=$defaultRoute');
+
   final nativeLaunch = await LockScreenService.getInitialCallLaunch();
-  final action = nativeLaunch?['action'] ?? '';
-  final actionId = nativeLaunch?['actionId'] ?? '';
-  final callId = nativeLaunch?['callId'] ?? '';
-  final callType = nativeLaunch?['callType'] ?? '';
+  var action = nativeLaunch?['action'] ?? '';
+  var actionId = nativeLaunch?['actionId'] ?? '';
+  var callId = nativeLaunch?['callId'] ?? '';
+  var callType = nativeLaunch?['callType'] ?? '';
+
+  if (callId.isEmpty) {
+    if (defaultRoute.startsWith('/active-audio-call/')) {
+      callId = defaultRoute.substring('/active-audio-call/'.length);
+      callType = 'audio';
+      actionId = 'accept';
+      action = 'ACCEPT_CALL';
+    } else if (defaultRoute.startsWith('/active-video-call/')) {
+      callId = defaultRoute.substring('/active-video-call/'.length);
+      callType = 'video';
+      actionId = 'accept';
+      action = 'ACCEPT_CALL';
+    }
+  }
 
   debugPrint(
     '[BOOT] onCreate action=$action actionId=$actionId callId=$callId',
@@ -69,6 +88,15 @@ Future<AppLaunchConfig> resolveAppLaunchConfig() async {
 
   final isCallIntent = callId.isNotEmpty || actionId == 'accept';
   if (isCallIntent && callId.isNotEmpty) {
+    if (await LockScreenService.isCallOwnedByOtherHost(callId)) {
+      debugPrint(
+        '[HOST_OWNERSHIP] cold start callId=$callId is owned by other host, suppressing MainActivity call launch',
+      );
+      return const AppLaunchConfig(
+        mode: AppLaunchMode.normal,
+        initialLocation: '/splash',
+      );
+    }
     debugPrint('[BOOT] initial callId=$callId');
     VorynFirebaseMessaging.markCallLaunchHandled(callId);
     final isVideo = callType == 'video';
@@ -90,6 +118,7 @@ Future<AppLaunchConfig> resolveAppLaunchConfig() async {
           : '/active-audio-call/$callId';
       debugPrint('[BOOT] launchMode=acceptedCall');
       debugPrint('[BOOT] router initialLocation=$loc');
+      debugPrint('[CALL_ROUTE] firstRoute=$loc');
       return AppLaunchConfig(
         mode: AppLaunchMode.acceptedCall,
         callId: callId,
@@ -114,17 +143,23 @@ Future<AppLaunchConfig> resolveAppLaunchConfig() async {
     final pending = await const VorynCallService().getPendingIncomingCall();
     if (pending != null &&
         (pending.status == 'calling' || pending.status == 'ringing')) {
-      final isVideo = pending.callType == 'video';
-      final loc = '/incoming-call/${pending.id}';
-      debugPrint('[BOOT] recovered pending incoming call: ${pending.id}');
-      debugPrint('[BOOT] launchMode=incomingCall');
-      debugPrint('[BOOT] router initialLocation=$loc');
-      return AppLaunchConfig(
-        mode: AppLaunchMode.incomingCall,
-        callId: pending.id,
-        callType: isVideo ? 'video' : 'audio',
-        initialLocation: loc,
-      );
+      if (await LockScreenService.isCallOwnedByOtherHost(pending.id)) {
+        debugPrint(
+          '[HOST_OWNERSHIP] pending call ${pending.id} is owned by other host',
+        );
+      } else {
+        final isVideo = pending.callType == 'video';
+        final loc = '/incoming-call/${pending.id}';
+        debugPrint('[BOOT] recovered pending incoming call: ${pending.id}');
+        debugPrint('[BOOT] launchMode=incomingCall');
+        debugPrint('[BOOT] router initialLocation=$loc');
+        return AppLaunchConfig(
+          mode: AppLaunchMode.incomingCall,
+          callId: pending.id,
+          callType: isVideo ? 'video' : 'audio',
+          initialLocation: loc,
+        );
+      }
     }
   } catch (e) {
     debugPrint('[BOOT] error checking pending incoming call on cold start: $e');
@@ -155,6 +190,157 @@ Future<void> main() async {
       initialLaunchConfig: launchConfig,
     ),
   );
+}
+
+/// Dedicated Dart entrypoint for VorynCallActivity (isolated call host).
+/// Never builds VorynShell, dashboard tabs, or initializes unneeded background services.
+@pragma('vm:entry-point')
+Future<void> callMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  LockScreenService.isCallHostApp = true;
+  final controller = VorynThemeController();
+  await controller.load();
+  await VorynBackend.initialize();
+
+  final defaultRoute =
+      WidgetsBinding.instance.platformDispatcher.defaultRouteName;
+  debugPrint('[CALL_MAIN] defaultRouteName=$defaultRoute');
+
+  final nativeLaunch = await LockScreenService.getInitialCallLaunch();
+  var callId = nativeLaunch?['callId'] ?? '';
+  var callType = nativeLaunch?['callType'] ?? 'audio';
+
+  if (callId.isEmpty) {
+    if (defaultRoute.startsWith('/active-audio-call/')) {
+      callId = defaultRoute.substring('/active-audio-call/'.length);
+      callType = 'audio';
+    } else if (defaultRoute.startsWith('/active-video-call/')) {
+      callId = defaultRoute.substring('/active-video-call/'.length);
+      callType = 'video';
+    }
+  }
+
+  debugPrint('[CALL_MAIN] resolved callId=$callId callType=$callType');
+
+  final isVideo = callType == 'video';
+  final initialRoute = isVideo
+      ? '/active-video-call/$callId'
+      : '/active-audio-call/$callId';
+  debugPrint('[CALL_ROUTE] firstRoute=$initialRoute');
+
+  final acceptTimestamp =
+      int.tryParse(nativeLaunch?['acceptTimestamp'] ?? '') ?? 0;
+  if (callId.isNotEmpty) {
+    final tracker = VorynCallLatencyTracker.start(
+      callId: callId,
+      baseTimestampMs: acceptTimestamp > 0 ? acceptTimestamp : null,
+    );
+    unawaited(tracker.stage('call_main_bootstrap'));
+  }
+
+  runApp(
+    VorynCallHostApp(
+      controller: controller,
+      initialLocation: initialRoute,
+      callId: callId,
+      isVideo: isVideo,
+    ),
+  );
+}
+
+class VorynCallHostApp extends StatefulWidget {
+  const VorynCallHostApp({
+    super.key,
+    required this.controller,
+    required this.initialLocation,
+    required this.callId,
+    required this.isVideo,
+  });
+
+  final VorynThemeController controller;
+  final String initialLocation;
+  final String callId;
+  final bool isVideo;
+
+  @override
+  State<VorynCallHostApp> createState() => _VorynCallHostAppState();
+}
+
+class _VorynCallHostAppState extends State<VorynCallHostApp> {
+  late final GoRouter _router = GoRouter(
+    initialLocation: widget.initialLocation,
+    routes: [
+      GoRoute(
+        path: '/active-audio-call/:callId',
+        builder: (context, state) {
+          final callId = state.pathParameters['callId'] ?? widget.callId;
+          final extra = state.extra as Map<String, dynamic>?;
+          return ActiveAudioCallScreen(
+            callId: callId,
+            user: extra?['user'] as VorynMockUser?,
+            existingSession: extra?['session'] as VorynLiveKitSession?,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/active-video-call/:callId',
+        builder: (context, state) {
+          final callId = state.pathParameters['callId'] ?? widget.callId;
+          final extra = state.extra as Map<String, dynamic>?;
+          return ActiveVideoCallScreen(
+            callId: callId,
+            user: extra?['user'] as VorynMockUser?,
+            existingSession: extra?['session'] as VorynLiveKitSession?,
+          );
+        },
+      ),
+    ],
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    LockScreenService.setCallLaunchListener(
+      (data) {
+        debugPrint('[CALL_HOST] onCallLaunchIntent ignored during active call');
+      },
+      onDeclined: (callId) {
+        debugPrint('[CALL_HOST] onDeclined for callId=$callId');
+      },
+      onIncoming: (data) {
+        debugPrint('[CALL_HOST] onIncoming ignored in call host');
+      },
+      onTerminal: (callId, type) {
+        debugPrint('[CALL_HOST] onTerminal for callId=$callId type=$type');
+        VorynCallRuntimeCoordinator.forCall(
+          callId,
+        ).performTeardown(isLocalInitiator: false);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _router.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        return MaterialApp.router(
+          title: 'Voryn Call',
+          debugShowCheckedModeBanner: false,
+          themeMode: widget.controller.mode,
+          theme: VorynTheme.light,
+          darkTheme: VorynTheme.dark,
+          routerConfig: _router,
+        );
+      },
+    );
+  }
 }
 
 class VorynApp extends StatefulWidget {
@@ -198,12 +384,41 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
       unawaited(initializeVorynContactState());
     });
 
-    // Listen for warm-app call launch intents (onNewIntent)
+    // Listen for warm-app call launch intents (onNewIntent) and native FCM events
     LockScreenService.setCallLaunchListener(
       _handleWarmCallLaunch,
       onDeclined: (callId) {
         debugPrint('[BOOT] onDeclined from native receiver for callId=$callId');
         VorynFirebaseMessaging.handleDeclineAction(callId);
+      },
+      onIncoming: (data) async {
+        final callId = data['callId'] ?? '';
+        debugPrint('[BOOT] onIncoming from native service for callId=$callId');
+        final isLocked = await LockScreenService.isKeyguardLocked();
+        if (isLocked) {
+          debugPrint(
+            '[LOCKSCREEN] suppressed Flutter incoming route while locked',
+          );
+          return;
+        }
+        if (await LockScreenService.isCallOwnedByOtherHost(callId)) {
+          debugPrint(
+            '[HOST_OWNERSHIP] suppressed onIncoming in MainActivity: callId=$callId owned by other host',
+          );
+          return;
+        }
+        if (callId.isNotEmpty && !_isCallRouteActive() && mounted) {
+          _router.go('/incoming-call/$callId');
+        }
+      },
+      onTerminal: (callId, type) {
+        debugPrint(
+          '[BOOT] onTerminal from native service for callId=$callId type=$type',
+        );
+        VorynFirebaseMessaging.clearPendingIncomingCall(callId);
+        VorynCallRuntimeCoordinator.forCall(
+          callId,
+        ).performTeardown(isLocalInitiator: false);
       },
     );
 
@@ -247,16 +462,93 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
 
   Future<void> _checkPendingIncomingCall() async {
     if (_isCallRouteActive()) return;
+    final isLocked = await LockScreenService.isKeyguardLocked();
+    if (isLocked) {
+      debugPrint('[LOCKSCREEN] suppressed pending incoming check while locked');
+      return;
+    }
     final currentUser = VorynBackend.client?.auth.currentUser;
     if (currentUser == null) return;
 
     try {
+      final nativeMap = await LockScreenService.getPendingIncomingCall();
+      if (nativeMap != null) {
+        final nCallId = nativeMap['callId']?.toString() ?? '';
+        final nState = nativeMap['state']?.toString() ?? '';
+        final nReceivedAt =
+            int.tryParse(nativeMap['receivedAt']?.toString() ?? '') ?? 0;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final isFresh = nReceivedAt == 0 || (now - nReceivedAt) < 60000;
+        if (nCallId.isNotEmpty && isFresh) {
+          if (await LockScreenService.isCallOwnedByOtherHost(nCallId)) {
+            debugPrint(
+              '[HOST_OWNERSHIP] suppressed pending incoming check in MainActivity: callId=$nCallId owned by other host',
+            );
+            return;
+          }
+          if (VorynCallRuntimeCoordinator.isAcceptInFlight(nCallId)) {
+            debugPrint(
+              '[RESUME] accept in-flight for $nCallId, suppressing incoming screen',
+            );
+            return;
+          }
+          if (nState == 'RINGING' || nState == 'pending_incoming') {
+            if (!_isCallRouteActive() && mounted) {
+              debugPrint(
+                '[RESUME] recovered native pending incoming call: $nCallId',
+              );
+              _router.go('/incoming-call/$nCallId');
+              return;
+            }
+          } else if (nState == 'accepting') {
+            debugPrint('[RESUME] recovered native accepted call: $nCallId');
+            if (!_isCallRouteActive() && mounted) {
+              final isVideo =
+                  (nativeMap['callType']?.toString() ?? '') == 'video';
+              _router.go(
+                isVideo
+                    ? '/active-video-call/$nCallId'
+                    : '/active-audio-call/$nCallId',
+              );
+              return;
+            }
+          }
+        }
+      }
+
       final pending = await const VorynCallService().getPendingIncomingCall();
-      if (pending != null &&
-          (pending.status == 'calling' || pending.status == 'ringing')) {
-        if (!_isCallRouteActive() && mounted) {
-          debugPrint('[RESUME] recovered pending incoming call: ${pending.id}');
-          _router.go('/incoming-call/${pending.id}');
+      if (pending != null) {
+        if (await LockScreenService.isCallOwnedByOtherHost(pending.id)) {
+          debugPrint(
+            '[HOST_OWNERSHIP] suppressed pending incoming check in MainActivity: callId=${pending.id} owned by other host',
+          );
+          return;
+        }
+        if (VorynCallRuntimeCoordinator.isAcceptInFlight(pending.id)) {
+          debugPrint(
+            '[RESUME] accept in-flight for ${pending.id}, suppressing incoming screen',
+          );
+          return;
+        }
+        if (pending.status == 'accepting') {
+          debugPrint('[RESUME] recovered pending accepted call: ${pending.id}');
+          if (!_isCallRouteActive() && mounted) {
+            final isVideo = pending.callType == 'video';
+            _router.go(
+              isVideo
+                  ? '/active-video-call/${pending.id}'
+                  : '/active-audio-call/${pending.id}',
+            );
+          }
+          return;
+        }
+        if (pending.status == 'calling' || pending.status == 'ringing') {
+          if (!_isCallRouteActive() && mounted) {
+            debugPrint(
+              '[RESUME] recovered pending incoming call: ${pending.id}',
+            );
+            _router.go('/incoming-call/${pending.id}');
+          }
         }
       }
     } catch (e) {
@@ -283,6 +575,13 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
 
     debugPrint('[BOOT] warm app launch callId=$callId actionId=$actionId');
     if (callId.isEmpty) return;
+
+    if (await LockScreenService.isCallOwnedByOtherHost(callId)) {
+      debugPrint(
+        '[HOST_OWNERSHIP] suppressed warm call launch in MainActivity: callId=$callId owned by other host',
+      );
+      return;
+    }
 
     if (actionId == 'decline') {
       await VorynFirebaseMessaging.handleDeclineAction(callId);
@@ -311,9 +610,15 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
         baseTimestampMs: acceptTimestamp > 0 ? acceptTimestamp : null,
       );
       unawaited(tracker.stage('flutter_accept_received'));
-      _router.go(
-        isVideo ? '/active-video-call/$callId' : '/active-audio-call/$callId',
-      );
+      try {
+        await VorynCallRuntimeCoordinator.runAcceptOnce(callId, () async {
+          _router.go(
+            isVideo
+                ? '/active-video-call/$callId'
+                : '/active-audio-call/$callId',
+          );
+        });
+      } catch (_) {}
     } else {
       _router.go('/incoming-call/$callId');
     }
@@ -325,6 +630,13 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     if (VorynFirebaseMessaging.isCallLaunchHandled(launch.callId)) {
       debugPrint(
         '[BOOT] ignoring duplicate pending call launch ${launch.callId}',
+      );
+      return;
+    }
+
+    if (await LockScreenService.isCallOwnedByOtherHost(launch.callId)) {
+      debugPrint(
+        '[HOST_OWNERSHIP] suppressed pending call launch in MainActivity: callId=${launch.callId} owned by other host',
       );
       return;
     }
@@ -364,11 +676,18 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
         reason: 'accept',
       );
       final isVideo = activeCall.callType == 'video';
-      if (isVideo) {
-        _router.go('/active-video-call/${launch.callId}');
-      } else {
-        _router.go('/active-audio-call/${launch.callId}');
-      }
+      try {
+        await VorynCallRuntimeCoordinator.runAcceptOnce(
+          launch.callId,
+          () async {
+            if (isVideo) {
+              _router.go('/active-video-call/${launch.callId}');
+            } else {
+              _router.go('/active-audio-call/${launch.callId}');
+            }
+          },
+        );
+      } catch (_) {}
     } else {
       _router.go('/incoming-call/${launch.callId}');
     }
@@ -633,11 +952,17 @@ class VorynShell extends StatefulWidget {
 class _VorynShellState extends State<VorynShell> with WidgetsBindingObserver {
   Timer? _incomingCallTimer;
   bool _showingIncomingCall = false;
+  bool _isKeyguardLocked = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    LockScreenService.isKeyguardLocked().then((locked) {
+      if (mounted && locked != _isKeyguardLocked) {
+        setState(() => _isKeyguardLocked = locked);
+      }
+    });
     _incomingCallTimer = Timer.periodic(
       const Duration(seconds: 3),
       (_) => _checkIncomingCall(),
@@ -648,6 +973,11 @@ class _VorynShellState extends State<VorynShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      LockScreenService.isKeyguardLocked().then((locked) {
+        if (mounted && locked != _isKeyguardLocked) {
+          setState(() => _isKeyguardLocked = locked);
+        }
+      });
       _checkIncomingCall();
     }
   }
@@ -683,6 +1013,10 @@ class _VorynShellState extends State<VorynShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_isKeyguardLocked) {
+      debugPrint('[LOCKSCREEN] shellBuildWhileLocked=false');
+      return const SizedBox.shrink();
+    }
     debugPrint('[BOOT] VorynShell build');
     final colors = context.vorynColors;
 

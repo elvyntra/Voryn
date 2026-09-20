@@ -13,11 +13,10 @@ import 'lock_screen_service.dart';
 @pragma('vm:entry-point')
 Future<void> vorynFirebaseBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final callId = message.data['call_id'] ?? '';
-  debugPrint('[FCM_CALL] background receive callId=$callId');
-  await Firebase.initializeApp();
-  debugPrint('[FCM_CALL] native presentation requested callId=$callId');
-  await VorynFirebaseMessaging.showIncomingCallNotification(message);
+  final callId = message.data['call_id'] ?? message.data['callId'] ?? '';
+  debugPrint('[FCM_CALL] dart_background_handler_start callId=$callId');
+  // Native VorynFirebaseMessagingService is the sole alert owner on Android.
+  // We do not invoke MethodChannel / showNativeIncomingCall from the background isolate.
 }
 
 @pragma('vm:entry-point')
@@ -103,10 +102,11 @@ class VorynFirebaseMessaging {
     final messaging = FirebaseMessaging.instance;
     messaging.onTokenRefresh.listen(_registerToken);
     FirebaseMessaging.onMessage.listen((message) async {
-      final callId = message.data['call_id'] ?? '';
+      final callId = message.data['call_id'] ?? message.data['callId'] ?? '';
       debugPrint('[FCM_CALL] foreground receive callId=$callId');
-      debugPrint('[FCM_CALL] native presentation requested callId=$callId');
-      await showIncomingCallNotification(message);
+      if (defaultTargetPlatform != TargetPlatform.android) {
+        await showIncomingCallNotification(message);
+      }
     });
   }
 
@@ -162,11 +162,7 @@ class VorynFirebaseMessaging {
         : 'Voryn user';
     final isVideo = data['call_type'] == 'video';
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      await LockScreenService.showNativeIncomingCall(
-        callId: callId,
-        callerName: callerName,
-        callType: isVideo ? 'video' : 'audio',
-      );
+      // Native VorynFirebaseMessagingService is the sole alert owner on Android.
       return;
     }
     await _localNotifications.show(
@@ -311,18 +307,31 @@ class VorynFirebaseMessaging {
       return;
     }
 
+    final tokenPrefix = token.length > 8 ? token.substring(0, 8) : token;
+    debugPrint(
+      '[FCM_TOKEN] registered for user=${user.id} tokenPrefix=$tokenPrefix',
+    );
+
     final preferences = await SharedPreferences.getInstance();
     final installationId =
         preferences.getString('voryn.installation.id') ??
         'android-${DateTime.now().microsecondsSinceEpoch}';
     await preferences.setString('voryn.installation.id', installationId);
-    await client.from('user_devices').upsert({
-      'user_uid': user.id,
-      'installation_id': installationId,
-      'platform': 'android',
-      'device_name': 'Voryn Android',
-      'push_token': token,
-      'last_active_at': DateTime.now().toUtc().toIso8601String(),
-    }, onConflict: 'user_uid,installation_id');
+
+    try {
+      await client.from('user_devices').upsert({
+        'user_uid': user.id,
+        'installation_id': installationId,
+        'platform': 'android',
+        'device_name': 'Voryn Android',
+        'push_token': token,
+        'last_active_at': DateTime.now().toUtc().toIso8601String(),
+      }, onConflict: 'user_uid,installation_id');
+      debugPrint(
+        '[FCM_TOKEN] registration success in user_devices for user=${user.id}',
+      );
+    } catch (e) {
+      debugPrint('[FCM_TOKEN] registration error: $e');
+    }
   }
 }

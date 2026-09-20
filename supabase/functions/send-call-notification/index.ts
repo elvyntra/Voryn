@@ -60,13 +60,28 @@ Deno.serve(async (request) => {
       });
     }
 
-    const { callId, recipientUid } = await request.json();
+    const { callId, recipientUid, action, type, status } = await request.json();
     if (typeof callId !== 'string' || !/^[0-9a-f-]{36}$/i.test(callId)) {
       return Response.json({ error: 'Invalid call.' }, {
         status: 400,
         headers: corsHeaders,
       });
     }
+
+    const isTerminal =
+      action === 'cancel' ||
+      action === 'end' ||
+      type === 'call_cancelled' ||
+      type === 'call_ended' ||
+      status === 'cancelled' ||
+      status === 'completed';
+
+    const pushType =
+      action === 'cancel' || type === 'call_cancelled' || status === 'cancelled'
+        ? 'call_cancelled'
+        : isTerminal
+        ? 'call_ended'
+        : 'incoming_call';
 
     const admin = createClient(supabaseUrl, secretKey);
     const { data: call, error: callError } = await admin
@@ -85,14 +100,13 @@ Deno.serve(async (request) => {
     let targetRecipientUid: string | null = null;
 
     if (recipientUid && typeof recipientUid === 'string') {
-      // Check caller is in call_participants and call is active
       const { data: callerPart } = await admin
         .from('call_participants')
         .select('user_uid')
         .eq('call_id', callId)
         .eq('user_uid', user.id)
         .maybeSingle();
-      if (!callerPart || !['calling', 'ringing', 'connected'].includes(call.status)) {
+      if (!callerPart && call.initiated_by !== user.id) {
         return Response.json({ error: 'Call is unavailable for invite.' }, {
           status: 403,
           headers: corsHeaders,
@@ -100,7 +114,7 @@ Deno.serve(async (request) => {
       }
       targetRecipientUid = recipientUid;
     } else {
-      if (call.initiated_by !== user.id || call.status !== 'calling') {
+      if (!isTerminal && (call.initiated_by !== user.id || call.status !== 'calling')) {
         return Response.json({ error: 'Call is unavailable.' }, {
           status: 403,
           headers: corsHeaders,
@@ -119,13 +133,15 @@ Deno.serve(async (request) => {
       return Response.json({ delivered: 0 }, { headers: corsHeaders });
     }
 
-    const { data: settings } = await admin
-      .from('user_settings')
-      .select('incoming_call_notifications, do_not_disturb')
-      .eq('user_uid', targetRecipientUid)
-      .maybeSingle();
-    if (settings?.incoming_call_notifications === false || settings?.do_not_disturb === true) {
-      return Response.json({ delivered: 0 }, { headers: corsHeaders });
+    if (!isTerminal) {
+      const { data: settings } = await admin
+        .from('user_settings')
+        .select('incoming_call_notifications, do_not_disturb')
+        .eq('user_uid', targetRecipientUid)
+        .maybeSingle();
+      if (settings?.incoming_call_notifications === false || settings?.do_not_disturb === true) {
+        return Response.json({ delivered: 0 }, { headers: corsHeaders });
+      }
     }
 
     const { data: callerProfile } = await admin
@@ -155,7 +171,7 @@ Deno.serve(async (request) => {
     if (!accessToken) throw new Error('Could not authorize Firebase messaging.');
 
     const endpoint = `https://fcm.googleapis.com/v1/projects/${credentials.project_id}/messages:send`;
-    console.log(`[FCM_CALL] send start callId=${callId} recipient=${targetRecipientUid}`);
+    console.log(`[FCM_CALL] send_start callId=${callId} target_devices=${tokens.length}`);
     const responses = await Promise.all(tokens.map(async (token) => {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -167,13 +183,16 @@ Deno.serve(async (request) => {
           message: {
             token,
             data: {
-              type: 'incoming_call',
+              type: pushType,
               call_id: callId,
-              call_type: call.call_type,
+              callId: callId,
+              call_type: call.call_type ?? 'audio',
+              callType: call.call_type ?? 'audio',
               caller_name: callerName,
+              callerName: callerName,
             },
             android: {
-              priority: 'HIGH',
+              priority: 'high',
               ttl: '30s',
             },
           },
@@ -182,9 +201,9 @@ Deno.serve(async (request) => {
       try {
         const resJson = await response.json();
         if (response.ok) {
-          console.log(`[FCM_CALL] send success messageId=${resJson.name}`);
+          console.log(`[FCM_CALL] send_success callId=${callId} messageId=${resJson.name}`);
         } else {
-          console.error(`[FCM_CALL] send failure status=${response.status} body=${JSON.stringify(resJson)}`);
+          console.error(`[FCM_CALL] send_failure callId=${callId} code=${resJson?.error?.code ?? response.status}`);
         }
       } catch (_) {}
       return response;

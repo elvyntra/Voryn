@@ -1,6 +1,7 @@
-import 'dart:io' show Platform;
-
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
@@ -187,7 +188,7 @@ class VorynAuthService {
       return const VorynAuthResult(error: _backendUnavailableMessage);
     }
     try {
-      if (Platform.isAndroid) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         final googleSignIn = GoogleSignIn(scopes: const ['email']);
         final account = await googleSignIn.signIn();
         if (account == null) {
@@ -234,6 +235,27 @@ class VorynAuthService {
   }
 
   Future<void> signOut() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final installationId = preferences.getString('voryn.installation.id');
+      final user = _client?.auth.currentUser;
+      if (_client != null && user != null) {
+        if (installationId != null && installationId.isNotEmpty) {
+          await _client!.from('user_devices').delete().match({
+            'user_uid': user.id,
+            'installation_id': installationId,
+          });
+        } else {
+          final token = await FirebaseMessaging.instance.getToken();
+          if (token != null && token.isNotEmpty) {
+            await _client!.from('user_devices').delete().match({
+              'user_uid': user.id,
+              'push_token': token,
+            });
+          }
+        }
+      }
+    } catch (_) {}
     await _client?.auth.signOut();
   }
 }

@@ -170,7 +170,7 @@ class VorynCallService {
                     nativePending['callerName']?.toString() ?? 'Voryn user',
                 vorynId: '',
                 callType: nativePending['callType']?.toString() ?? 'audio',
-                status: 'ringing',
+                status: nState == 'accepting' ? 'accepting' : 'ringing',
                 createdAt: receivedAt > 0
                     ? DateTime.fromMillisecondsSinceEpoch(receivedAt)
                     : DateTime.now(),
@@ -238,6 +238,13 @@ class VorynCallService {
         payload: {'callId': callId, 'status': 'completed'},
       );
     } catch (_) {}
+
+    try {
+      await client.functions.invoke(
+        'send-call-notification',
+        body: {'callId': callId, 'action': 'end'},
+      );
+    } catch (_) {}
   }
 
   Future<void> cancel(String callId) async {
@@ -262,6 +269,13 @@ class VorynCallService {
       await channel.sendBroadcastMessage(
         event: 'call_ended',
         payload: {'callId': callId, 'status': 'cancelled'},
+      );
+    } catch (_) {}
+
+    try {
+      await client.functions.invoke(
+        'send-call-notification',
+        body: {'callId': callId, 'action': 'cancel'},
       );
     } catch (_) {}
   }

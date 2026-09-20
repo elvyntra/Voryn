@@ -50,27 +50,49 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   bool _muted = false;
   bool _held = false;
   bool _screenSharing = false;
+  bool _speakerOn = false;
   bool _isConnected = false;
   String _callStatusText = 'Calling…';
 
   bool _ending = false;
   bool _ended = false;
   bool _listenerAttached = false;
+  bool _markedActive = false;
+
+  void _notifyCallActive() {
+    if (_markedActive) return;
+    _markedActive = true;
+    unawaited(
+      LockScreenService.markCallActive(
+        callId: widget.callId,
+        callerName: _user.name,
+        callType: 'audio',
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+    debugPrint('[CALL_ROUTE] active route initState');
     LockScreenService.cancelNativeIncomingCall(widget.callId, reason: 'accept');
     _coordinator = VorynCallRuntimeCoordinator.forCall(widget.callId);
     _latencyTracker =
         VorynCallLatencyTracker.get(widget.callId) ??
         VorynCallLatencyTracker.start(callId: widget.callId);
     unawaited(_latencyTracker?.stage('active_route_mounted'));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint('[CALL_ROUTE] active route mounted');
+    });
 
     _coordinator.attachScreen(
       onStatusChanged: _handleRealtimeStatus,
       onRouteExit: _handleRouteExit,
     );
+
+    debugPrint('[LOCKSCREEN] accept');
+    debugPrint('[LOCKSCREEN] activeCallRouteReady');
+    unawaited(LockScreenService.setCallPresentationVisible(true));
 
     _user =
         widget.user ??
@@ -90,6 +112,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   }
 
   Future<void> _start() async {
+    debugPrint('[CALL_BOOTSTRAP] start');
     // If user info was not supplied, attempt to resolve it from the call history
     if (widget.user == null) {
       try {
@@ -124,26 +147,44 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       _session = widget.existingSession;
       _coordinator.session = _session;
       _isConnected = true;
+      _speakerOn = false;
+      unawaited(_session?.setSpeakerEnabled(false));
+      _coordinator.updateProximity(isConnected: true, mediaMode: 'audio');
+      _notifyCallActive();
       _attachRoomListener();
       _startTimer();
       unawaited(_latencyTracker?.stage('call_connected_ui'));
+      unawaited(
+        LockScreenService.isKeyguardLocked().then((isLocked) {
+          debugPrint(
+            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+          );
+        }),
+      );
       if (mounted) setState(() => _loading = false);
       return;
     }
 
     try {
+      debugPrint('[CALL_BOOTSTRAP] LiveKit connect start');
       _session = await _coordinator.connect(
         video: false,
         latencyTracker: _latencyTracker,
       );
+      _speakerOn = false;
+      await _session?.setSpeakerEnabled(false);
       _attachRoomListener();
       if (_session!.room.remoteParticipants.isNotEmpty) {
         _isConnected = true;
+        _coordinator.updateProximity(isConnected: true, mediaMode: 'audio');
+        _notifyCallActive();
         _startTimer();
         await _latencyTracker?.stage('backend_accept_start');
         await const VorynCallService().setConnected(widget.callId);
         await _latencyTracker?.stage('backend_accept_done');
         await _latencyTracker?.stage('call_connected_ui');
+        final isLocked = await LockScreenService.isKeyguardLocked();
+        debugPrint('[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked');
       } else {
         _callStatusText = 'Ringing…';
       }
@@ -151,8 +192,11 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       debugPrint('[CALL ${widget.callId}] connect fallback / mock mode: $e');
       _isConnected = true;
       _callStatusText = 'Connected';
+      _notifyCallActive();
       _startTimer();
       await _latencyTracker?.stage('call_connected_ui');
+      final isLocked = await LockScreenService.isKeyguardLocked();
+      debugPrint('[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked');
     }
     if (mounted) {
       setState(() => _loading = false);
@@ -162,9 +206,18 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   void _handleRealtimeStatus(String status) {
     if (status == 'connected' && !_isConnected) {
       _isConnected = true;
+      _coordinator.updateProximity(isConnected: true, mediaMode: 'audio');
+      _notifyCallActive();
       _callStatusText = '';
       _startTimer();
       unawaited(_latencyTracker?.stage('call_connected_ui'));
+      unawaited(
+        LockScreenService.isKeyguardLocked().then((isLocked) {
+          debugPrint(
+            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+          );
+        }),
+      );
       if (mounted) setState(() {});
     } else if (status == 'ringing' && !_isConnected) {
       _callStatusText = 'Ringing…';
@@ -202,9 +255,24 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
 
     if (room.remoteParticipants.isNotEmpty && !_isConnected) {
       _isConnected = true;
+      _coordinator.updateProximity(isConnected: true, mediaMode: 'audio');
+      _notifyCallActive();
       _callStatusText = '';
       _startTimer();
-      unawaited(const VorynCallService().setConnected(widget.callId));
+      unawaited(_latencyTracker?.stage('backend_accept_start'));
+      unawaited(
+        const VorynCallService().setConnected(widget.callId).then((_) {
+          _latencyTracker?.stage('backend_accept_done');
+        }),
+      );
+      unawaited(_latencyTracker?.stage('call_connected_ui'));
+      unawaited(
+        LockScreenService.isKeyguardLocked().then((isLocked) {
+          debugPrint(
+            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+          );
+        }),
+      );
       if (mounted) setState(() {});
     }
 
@@ -290,6 +358,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (_ending || _ended) return;
     final next = !_held;
     if (mounted) setState(() => _held = next);
+    _coordinator.updateProximity(isHeld: next);
   }
 
   Future<void> _toggleShare() async {
@@ -299,52 +368,19 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (mounted) setState(() => _screenSharing = next);
   }
 
-  void _openAudioRoutes() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF16191E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.volume_up_rounded, color: Colors.white),
-              title: const Text(
-                'Speaker',
-                style: TextStyle(color: Colors.white),
-              ),
-              onTap: () async {
-                await _session?.setSpeakerEnabled(true);
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-            ),
-            ListTile(
-              leading: const Icon(
-                Icons.phone_in_talk_rounded,
-                color: Colors.white,
-              ),
-              title: const Text(
-                'Earpiece / Phone',
-                style: TextStyle(color: Colors.white),
-              ),
-              onTap: () async {
-                await _session?.setSpeakerEnabled(false);
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+  Future<void> _toggleSpeaker() async {
+    if (_ending || _ended) return;
+    final next = !_speakerOn;
+    await _session?.setSpeakerEnabled(next);
+    if (mounted) setState(() => _speakerOn = next);
   }
 
-  void _switchToVideo() {
+  void _switchToVideo() async {
     _coordinator.isTransitioning = true;
+    await _coordinator.prepareForVideoUpgrade();
     _detachRoomListener();
     _coordinator.detachScreen();
+    if (!mounted) return;
     context.pushReplacement(
       '/active-video-call/${widget.callId}',
       extra: {'user': _user, 'session': _session},
@@ -378,6 +414,14 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     _timer?.cancel();
     _detachRoomListener();
     if (!mounted) return;
+    if (LockScreenService.isCallHostApp) {
+      await LockScreenService.moveCallTaskBehindKeyguard();
+      return;
+    }
+    final isLocked = await LockScreenService.isKeyguardLocked();
+    if (isLocked || !mounted) {
+      return;
+    }
     if (context.canPop()) {
       context.pop();
     } else {
@@ -391,6 +435,9 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   }
 
   void _minimize() async {
+    if (LockScreenService.isCallHostApp) {
+      return;
+    }
     final isLocked = await LockScreenService.isKeyguardLocked();
     if (isLocked) {
       // Do not expose the normal app shell over lock screen
@@ -616,8 +663,10 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                               row1: [
                                 CallControlButton(
                                   icon: Icons.volume_up_rounded,
-                                  label: 'Audio',
-                                  onTap: _openAudioRoutes,
+                                  label: 'Speaker',
+                                  isActive: _speakerOn,
+                                  activeColor: colors.accent,
+                                  onTap: _toggleSpeaker,
                                 ),
                                 CallControlButton(
                                   icon: Icons.videocam_outlined,

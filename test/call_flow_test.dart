@@ -43,7 +43,7 @@ void main() {
 
       // Verify Stitch Screen 2 elements
       expect(find.text('SECURE CALL'), findsOneWidget);
-      expect(find.text('Audio'), findsOneWidget);
+      expect(find.text('Speaker'), findsOneWidget);
       expect(find.text('Video'), findsOneWidget);
       expect(find.text('Mute'), findsOneWidget);
       expect(find.text('Hold'), findsOneWidget);

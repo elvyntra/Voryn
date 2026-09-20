@@ -13,6 +13,28 @@ class VorynCallRuntimeCoordinator {
   VorynCallRuntimeCoordinator._(this.callId);
 
   static final Map<String, VorynCallRuntimeCoordinator> _instances = {};
+  static final Set<String> _acceptingCalls = {};
+
+  static bool isAcceptInFlight(String callId) =>
+      _acceptingCalls.contains(callId);
+
+  static Future<T> runAcceptOnce<T>(
+    String callId,
+    Future<T> Function() action,
+  ) async {
+    if (_acceptingCalls.contains(callId)) {
+      debugPrint(
+        '[CALL $callId] [COORDINATOR] accept already in flight, skipping duplicate invocation',
+      );
+      throw StateError('Accept already in flight for $callId');
+    }
+    _acceptingCalls.add(callId);
+    try {
+      return await action();
+    } finally {
+      Timer(const Duration(seconds: 4), () => _acceptingCalls.remove(callId));
+    }
+  }
 
   static VorynCallRuntimeCoordinator forCall(String callId) {
     return _instances.putIfAbsent(
@@ -35,6 +57,10 @@ class VorynCallRuntimeCoordinator {
   bool _isTearingDown = false;
   bool _isEnded = false;
   bool _routeExitIssued = false;
+
+  bool _isConnected = false;
+  String _mediaMode = 'audio';
+  bool _isHeld = false;
 
   /// Flag set when switching between Audio and Video screens to prevent
   /// the disposing screen from triggering teardown.
@@ -60,6 +86,39 @@ class VorynCallRuntimeCoordinator {
   void detachScreen() {
     _onStatusChanged = null;
     _onRouteExit = null;
+  }
+
+  void updateProximity({
+    bool? isConnected,
+    String? mediaMode,
+    bool? isHeld,
+    bool? isEnding,
+  }) {
+    if (isConnected != null) _isConnected = isConnected;
+    if (mediaMode != null) _mediaMode = mediaMode;
+    if (isHeld != null) _isHeld = isHeld;
+    final ending = isEnding ?? (_isEnded || _isTearingDown);
+
+    unawaited(
+      LockScreenService.updateProximityState(
+        callId: callId,
+        isConnected: _isConnected,
+        mediaMode: _mediaMode,
+        isHeld: _isHeld,
+        isEnding: ending,
+      ),
+    );
+  }
+
+  Future<void> prepareForVideoUpgrade() async {
+    _mediaMode = 'video';
+    await LockScreenService.updateProximityState(
+      callId: callId,
+      isConnected: _isConnected,
+      mediaMode: 'video',
+      isHeld: _isHeld,
+      isEnding: false,
+    );
   }
 
   void _ensureSubscription() {
@@ -88,11 +147,18 @@ class VorynCallRuntimeCoordinator {
     required bool video,
     VorynCallLatencyTracker? latencyTracker,
   }) {
-    if (session != null) return Future.value(session!);
+    _mediaMode = video ? 'video' : 'audio';
+    if (session != null) {
+      _isConnected = true;
+      updateProximity();
+      return Future.value(session!);
+    }
     return _connectFuture ??= const VorynLiveKitService()
         .connect(callId: callId, video: video, latencyTracker: latencyTracker)
         .then((s) {
           session = s;
+          _isConnected = true;
+          updateProximity();
           return s;
         });
   }
@@ -114,6 +180,7 @@ class VorynCallRuntimeCoordinator {
   }) async {
     if (_isEnded) return;
     _isTearingDown = true;
+    updateProximity(isEnding: true);
     debugPrint(
       '[CALL $callId] [COORDINATOR] teardown begin (local=$isLocalInitiator)',
     );
@@ -150,11 +217,15 @@ class VorynCallRuntimeCoordinator {
     session = null;
     debugPrint('[CALL $callId] [COORDINATOR] teardown complete');
 
+    await LockScreenService.setCallPresentationVisible(false);
+
     if (!_routeExitIssued) {
       _routeExitIssued = true;
       final isLocked = await LockScreenService.isKeyguardLocked();
-      if (isLocked) {
-        debugPrint('[CALL $callId] [COORDINATOR] route exit (locked)');
+      if (isLocked || LockScreenService.isCallHostApp) {
+        debugPrint(
+          '[CALL $callId] [COORDINATOR] route exit (locked=$isLocked, callHost=${LockScreenService.isCallHostApp})',
+        );
         await LockScreenService.moveCallTaskBehindKeyguard();
       } else {
         debugPrint('[CALL $callId] [COORDINATOR] route exit');

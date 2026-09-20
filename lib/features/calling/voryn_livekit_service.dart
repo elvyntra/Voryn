@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:livekit_client/livekit_client.dart' as livekit;
 
 import '../../core/backend/voryn_backend.dart';
+import 'voryn_audio_route_service.dart';
 import 'voryn_call_latency_tracker.dart';
 
 class VorynLiveKitSession {
@@ -101,7 +102,7 @@ class VorynLiveKitSession {
 
   Future<void> setSpeakerEnabled(bool enabled) {
     if (_disposed || _disconnecting) return Future<void>.value();
-    return livekit.AudioManager.instance.setSpeakerOutputPreferred(enabled);
+    return VorynAudioRouteService.instance.setSpeakerEnabled(enabled);
   }
 
   Future<void> setScreenShareEnabled(bool enabled) async {
@@ -176,6 +177,10 @@ class VorynLiveKitService {
 
       await room.localParticipant?.setMicrophoneEnabled(true);
       await latencyTracker?.stage('local_audio_ready');
+
+      await VorynAudioRouteService.instance.setDefaultAudioRoute(
+        isVideo: video,
+      );
 
       if (video) await room.localParticipant?.setCameraEnabled(true);
 

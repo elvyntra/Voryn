@@ -54,41 +54,24 @@ object IncomingCallNotificationManager {
         callType: String,
         callerName: String
     ) {
-        val prefs = context.getSharedPreferences(PREFS_PENDING, Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString(KEY_CALL_ID, callId)
-            .putString(KEY_CALL_TYPE, callType)
-            .putString(KEY_CALLER_NAME, callerName)
-            .putLong(KEY_RECEIVED_AT, System.currentTimeMillis())
-            .putString(KEY_STATE, "pending_incoming")
-            .apply()
+        VorynCallStateManager.recordRingingCall(context, callId, callType, callerName)
+        Log.d("VorynCall", "[INCOMING_STATE] state=ringing callId=$callId")
     }
 
-    fun setPendingCallAccepting(context: Context, callId: String) {
-        val prefs = context.getSharedPreferences(PREFS_PENDING, Context.MODE_PRIVATE)
-        if (prefs.getString(KEY_CALL_ID, null) == callId) {
-            prefs.edit().putString(KEY_STATE, "accepting").apply()
+    fun setPendingCallAccepting(context: Context, callId: String): Boolean {
+        val ok = VorynCallStateManager.setPendingCallAccepting(context, callId)
+        if (ok) {
+            Log.d("VorynCall", "[INCOMING_STATE] state=accepting callId=$callId")
         }
+        return ok
     }
 
     fun getPendingIncomingCall(context: Context): Map<String, Any>? {
-        val prefs = context.getSharedPreferences(PREFS_PENDING, Context.MODE_PRIVATE)
-        val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
-        val state = prefs.getString(KEY_STATE, "pending_incoming") ?: "pending_incoming"
-        return mapOf(
-            "callId" to callId,
-            "callType" to (prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"),
-            "callerName" to (prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"),
-            "receivedAt" to prefs.getLong(KEY_RECEIVED_AT, 0L),
-            "state" to state
-        )
+        return VorynCallStateManager.getPendingIncomingCall(context)
     }
 
     fun clearPendingIncomingCall(context: Context, callId: String? = null) {
-        val prefs = context.getSharedPreferences(PREFS_PENDING, Context.MODE_PRIVATE)
-        if (callId == null || prefs.getString(KEY_CALL_ID, null) == callId) {
-            prefs.edit().clear().apply()
-        }
+        VorynCallStateManager.clear(context, callId)
     }
 
     fun showIncomingCall(
@@ -133,6 +116,7 @@ object IncomingCallNotificationManager {
         Log.d("VorynCall", "[INCOMING] canUseFullScreenIntent=$canUseFullScreenIntent")
         Log.d("VorynCall", "[INCOMING] channelId=$CHANNEL_ID")
         Log.d("VorynCall", "[INCOMING] channelImportance=$channelImportance")
+        Log.d("VorynCall", "[LOCKSCREEN] FSI target=IncomingCallActivity")
         Log.d("VorynCall", "[INCOMING] fullScreenPendingIntentTarget=IncomingCallActivity")
 
         // Start ringing sound & vibration through authoritative ringtone manager
@@ -164,19 +148,14 @@ object IncomingCallNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // 3. Accept action (Launches MainActivity directly into active call with monotonic timestamp)
-        val acceptIntent = Intent(context, MainActivity::class.java).apply {
-            action = "ACCEPT_CALL"
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra("action_id", "accept")
-            putExtra("action", "accept")
+        // 3. Accept action (Broadcast to IncomingCallActionReceiver to capture exact tap timestamp)
+        val acceptIntent = Intent(context, IncomingCallActionReceiver::class.java).apply {
+            action = "com.voryn.app.ACTION_ACCEPT_CALL"
             putExtra("call_id", callId)
-            putExtra("callId", callId)
             putExtra("call_type", callType)
-            putExtra("callType", callType)
-            putExtra("accept_timestamp", SystemClock.elapsedRealtime())
+            putExtra("caller_name", callerName)
         }
-        val acceptPendingIntent = PendingIntent.getActivity(
+        val acceptPendingIntent = PendingIntent.getBroadcast(
             context,
             (callId + "_accept").hashCode(),
             acceptIntent,
@@ -208,20 +187,27 @@ object IncomingCallNotificationManager {
             .setContentIntent(fullScreenPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .setAutoCancel(true)
+            .setAutoCancel(false)
             .setSound(null)
             .build()
 
         manager.notify(callId.hashCode(), notification)
         Log.d("VorynCall", "[INCOMING] notificationPosted")
+        Log.d("VorynCall", "[INCOMING_NOTIFICATION] posted callId=$callId")
+        Log.d("VorynCall", "[INCOMING_STATE] state=ringing callId=$callId")
     }
 
     fun cancelIncomingCall(context: Context, callId: String, reason: String = "remote_terminal") {
         try {
-            clearPendingIncomingCall(context, callId)
+            if (reason != "accept") {
+                clearPendingIncomingCall(context, callId)
+            }
             IncomingCallRingtoneManager.stop(reason, callId)
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.cancel(callId.hashCode())
+            Log.d("VorynCall", "[INCOMING_NOTIFICATION] cancelled reason=$reason callId=$callId")
+            val state = if (reason == "accept") "accepting" else "terminal"
+            Log.d("VorynCall", "[INCOMING_STATE] state=$state callId=$callId")
         } catch (_: Exception) {}
     }
 }

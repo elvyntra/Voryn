@@ -3,8 +3,10 @@ package com.voryn.app
 import android.app.Activity
 import android.app.KeyguardManager
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -30,6 +32,19 @@ class IncomingCallActivity : Activity() {
         }
     }
 
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                val pending = IncomingCallNotificationManager.getPendingIncomingCall(this@IncomingCallActivity)
+                val state = pending?.get("state") as? String
+                Log.d("VorynCall", "[INCOMING_UNLOCK] device unlocked while ringing callId=$callId state=$state")
+                if (state == "pending_incoming") {
+                    bindViews()
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         activeInstance = this
@@ -51,7 +66,12 @@ class IncomingCallActivity : Activity() {
 
         extractExtras(intent)
 
+        try {
+            registerReceiver(userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
+        } catch (_: Exception) {}
+
         val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        Log.d("VorynCall", "[LOCKSCREEN] IncomingCallActivity shown callId=$callId")
         Log.d("VorynCall", "[NATIVE_CALL] IncomingCallActivity onCreate callId=$callId")
         Log.d("VorynCall", "[NATIVE_CALL] keyguardLocked=${km.isKeyguardLocked}")
         Log.d("VorynCall", "[NATIVE_CALL] action=incoming")
@@ -67,9 +87,36 @@ class IncomingCallActivity : Activity() {
         bindViews()
     }
 
+    override fun onStart() {
+        super.onStart()
+        Log.d("VorynCall", "[NATIVE_CALL] onStart callId=$callId")
+    }
+
     override fun onResume() {
         super.onResume()
-        Log.d("VorynCall", "[NATIVE_CALL] onResume")
+        Log.d("VorynCall", "[NATIVE_CALL] onResume callId=$callId")
+    }
+
+    override fun onPause() {
+        Log.d("VorynCall", "[NATIVE_CALL] onPause callId=$callId")
+        super.onPause()
+    }
+
+    override fun onStop() {
+        Log.d("VorynCall", "[NATIVE_CALL] onStop callId=$callId")
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        Log.d("VorynCall", "[NATIVE_CALL] onDestroy callId=$callId")
+        if (activeInstance == this) {
+            activeInstance = null
+        }
+        try {
+            unregisterReceiver(userPresentReceiver)
+        } catch (_: Exception) {}
+        // Do NOT stop ringtone on onDestroy - ringing call state outlives UI transitions (e.g. unlock)
+        super.onDestroy()
     }
 
     private fun extractExtras(intent: Intent?) {
@@ -106,15 +153,6 @@ class IncomingCallActivity : Activity() {
         }
     }
 
-    override fun onDestroy() {
-        Log.d("VorynCall", "[NATIVE_CALL] onDestroy")
-        if (activeInstance == this) {
-            activeInstance = null
-        }
-        IncomingCallRingtoneManager.stop("activity_destroy", if (callId.isNotBlank()) callId else null)
-        super.onDestroy()
-    }
-
     private fun handleDecline() {
         Log.d("VorynCall", "[NATIVE_CALL] decline")
         IncomingCallNotificationManager.clearPendingIncomingCall(this, callId)
@@ -132,14 +170,31 @@ class IncomingCallActivity : Activity() {
     }
 
     private fun handleAccept() {
-        Log.d("VorynCall", "[NATIVE_CALL] accept")
         val acceptTimestamp = android.os.SystemClock.elapsedRealtime()
+        Log.d("VorynCall", "[LOCK_ACCEPT] accept_tap callId=$callId")
         Log.d("VorynCall", "[CALL_LATENCY] accept_tap_native callId=$callId elapsed=0ms")
-        IncomingCallNotificationManager.setPendingCallAccepting(this, callId)
+        val ok = IncomingCallNotificationManager.setPendingCallAccepting(this, callId)
+        if (!ok) {
+            finish()
+            return
+        }
         IncomingCallRingtoneManager.stop("accept", if (callId.isNotBlank()) callId else null)
         cancelCallNotification()
 
-        val acceptIntent = Intent(this, MainActivity::class.java).apply {
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val isLocked = km.isKeyguardLocked
+        Log.d("VorynCall", "[LOCK_ACCEPT] keyguardLocked=$isLocked")
+
+        if (isLocked) {
+            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
+            Log.d("VorynCall", "[LOCK_ACCEPT] CallActivity launch callId=$callId")
+        } else {
+            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.MAIN)
+        }
+
+        val targetClass = if (isLocked) VorynCallActivity::class.java else MainActivity::class.java
+
+        val acceptIntent = Intent(this, targetClass).apply {
             action = "ACCEPT_CALL"
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("action_id", "accept")

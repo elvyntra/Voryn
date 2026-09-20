@@ -16,120 +16,79 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val lockScreenChannelName = "com.voryn.app/lock_screen"
-    private var methodChannel: MethodChannel? = null
+    var bridge: VorynCallPlatformBridge? = null
+        private set
     private var initialCallLaunch: Map<String, String>? = null
 
     companion object {
-        private var activeInstance: MainActivity? = null
+        var activeInstance: MainActivity? = null
+            private set
 
         var isAppInForeground: Boolean = false
             private set
 
         fun notifyCallDeclined(callId: String) {
-            activeInstance?.runOnUiThread {
-                activeInstance?.methodChannel?.invokeMethod("onCallDeclined", mapOf("callId" to callId))
-            }
+            VorynCallPlatformBridge.notifyCallDeclined(callId)
+        }
+
+        fun notifyIncomingCall(callId: String, callerName: String, callType: String) {
+            VorynCallPlatformBridge.notifyIncomingCall(callId, callerName, callType)
+        }
+
+        fun notifyCallTerminal(callId: String, type: String) {
+            VorynCallPlatformBridge.notifyCallTerminal(callId, type)
         }
     }
 
+    private var hasActiveCallPresentation: Boolean = false
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, lockScreenChannelName)
-        methodChannel?.setMethodCallHandler { call, result ->
-            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            when (call.method) {
-                "getElapsedRealtimeMs" -> {
-                    result.success(SystemClock.elapsedRealtime())
+        val bridgeInstance = VorynCallPlatformBridge(
+            activity = this,
+            messenger = flutterEngine.dartExecutor.binaryMessenger,
+            getInitialLaunchData = {
+                val launch = initialCallLaunch
+                initialCallLaunch = null
+                Log.d("VorynBoot", "[VORYN_BOOT] MainActivity getInitialCallLaunch returned $launch")
+                launch
+            },
+            onFinishCall = {
+                hasActiveCallPresentation = false
+                applyShowWhenLocked(false)
+                val callId = VorynCallStateManager.getCurrentCallId(this@MainActivity)
+                if (callId != null) {
+                    VorynCallStateManager.transition(this@MainActivity, callId, VorynCallStateManager.CallState.TERMINAL)
+                    VorynActiveCallService.stop(this@MainActivity, callId, "finish_call")
                 }
-                "getPendingIncomingCall" -> {
-                    val pending = IncomingCallNotificationManager.getPendingIncomingCall(this@MainActivity)
-                    result.success(pending)
+                val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                if (km.isKeyguardLocked) {
+                    moveTaskToBack(true)
                 }
-                "clearPendingIncomingCall" -> {
-                    val callId = call.argument<String>("callId")
-                    IncomingCallNotificationManager.clearPendingIncomingCall(this@MainActivity, callId)
-                    result.success(true)
-                }
-                "canUseFullScreenIntent" -> {
-                    val canUse = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        nm.canUseFullScreenIntent()
-                    } else {
-                        true
-                    }
-                    result.success(canUse)
-                }
-                "openFullScreenIntentSettings" -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-                            data = Uri.parse("package:$packageName")
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        startActivity(intent)
-                        result.success(true)
-                    } else {
-                        result.success(false)
-                    }
-                }
-                "isKeyguardLocked" -> {
-                    result.success(km.isKeyguardLocked)
-                }
-                "getInitialCallLaunch" -> {
-                    val launch = initialCallLaunch
-                    initialCallLaunch = null
-                    Log.d("VorynBoot", "[VORYN_BOOT] getInitialCallLaunch returned $launch")
-                    result.success(launch)
-                }
-                "setCallPresentationVisible" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    applyShowWhenLocked(enabled)
-                    result.success(true)
-                }
-                "moveCallTaskBehindKeyguard" -> {
-                    applyShowWhenLocked(false)
-                    if (km.isKeyguardLocked) {
-                        moveTaskToBack(true)
-                    }
-                    result.success(true)
-                }
-                "showNativeIncomingCall" -> {
-                    val callId = call.argument<String>("callId") ?: ""
-                    val callerName = call.argument<String>("callerName") ?: "Voryn User"
-                    val callType = call.argument<String>("callType") ?: "audio"
-                    IncomingCallNotificationManager.showIncomingCall(this@MainActivity, callId, callerName, callType)
-                    result.success(true)
-                }
-                "cancelNativeIncomingCall" -> {
-                    val callId = call.argument<String>("callId") ?: ""
-                    val reason = call.argument<String>("reason") ?: "remote_terminal"
-                    IncomingCallRingtoneManager.stop(reason, if (callId.isNotBlank()) callId else null)
-                    if (callId.isNotBlank()) {
-                        IncomingCallNotificationManager.cancelIncomingCall(this@MainActivity, callId, reason)
-                    }
-                    IncomingCallActivity.dismiss()
-                    result.success(true)
-                }
-                "stopRingtone" -> {
-                    val reason = call.argument<String>("reason") ?: "remote_terminal"
-                    val callId = call.argument<String>("callId")
-                    IncomingCallRingtoneManager.stop(reason, if (callId.isNullOrBlank()) null else callId)
-                    result.success(true)
-                }
-                else -> result.notImplemented()
+            },
+            onSetCallPresentationVisible = { enabled ->
+                hasActiveCallPresentation = enabled
+                applyShowWhenLocked(enabled)
             }
-        }
+        )
+        bridge = bridgeInstance
+        VorynProximityController.probe(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         activeInstance = this
         initialCallLaunch = extractCallLaunchData(intent)
-        val action = intent?.action ?: ""
         val callId = initialCallLaunch?.get("callId") ?: ""
+        if (callId.isNotBlank() && VorynCallHostManager.isCallOwnedByLockedCall(callId)) {
+            Log.d("VorynCall", "[HOST_OWNERSHIP] MainActivity suppressing initialCallLaunch for callId=$callId (owned by LOCKED_CALL)")
+            initialCallLaunch = null
+        }
+        val action = intent?.action ?: ""
         val actionId = initialCallLaunch?.get("actionId") ?: ""
-        val source = if (actionId == "accept") "accepted_call" else "launcher"
+        val source = intent?.getStringExtra("source") ?: ""
         Log.d("VorynBoot", "[BOOT] MainActivity onCreate source=$source action=$action actionId=$actionId callId=$callId")
+        Log.d("VorynCall", "[LOCKSCREEN] MainActivity started reason=$action")
 
         if (actionId == "accept" || action == "ACCEPT_CALL") {
             val acceptTimestamp = intent?.getLongExtra("accept_timestamp", 0L) ?: 0L
@@ -144,21 +103,60 @@ class MainActivity : FlutterActivity() {
             IncomingCallActivity.dismiss()
         }
 
-        updateLockScreenCallPresentation(intent)
+        applyShowWhenLocked(false)
         IncomingCallNotificationManager.ensureChannel(this)
     }
 
     override fun onResume() {
         super.onResume()
         isAppInForeground = true
+        if (!hasActiveCallPresentation) {
+            applyShowWhenLocked(false)
+        }
+
+        val callState = VorynCallStateManager.getCurrentState(this)
+        val activeCallId = VorynCallStateManager.getCurrentCallId(this)
+        if ((callState == VorynCallStateManager.CallState.ACTIVE || callState == VorynCallStateManager.CallState.ACCEPTING) &&
+            !activeCallId.isNullOrBlank() &&
+            (VorynCallHostManager.isCallOwnedByLockedCall(activeCallId) || VorynCallActivity.activeInstance != null)
+        ) {
+            Log.d("VorynCall", "[CALL_RECOVERY] MainActivity state=$callState callId=$activeCallId -> foreground existing call host")
+            val returnIntent = Intent(this, VorynCallActivity::class.java).apply {
+                action = "RETURN_TO_CALL"
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                putExtra("call_id", activeCallId)
+                putExtra("callId", activeCallId)
+            }
+            startActivity(returnIntent)
+            return
+        }
+
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (!km.isKeyguardLocked) {
+            val pending = IncomingCallNotificationManager.getPendingIncomingCall(this)
+            val state = pending?.get("state") as? String
+            val callId = pending?.get("callId") as? String
+            val callerName = pending?.get("callerName") as? String ?: "Voryn User"
+            val callType = pending?.get("callType") as? String ?: "audio"
+            if ((state == "RINGING" || state == "pending_incoming") && !callId.isNullOrBlank()) {
+                Log.d("VorynCall", "[INCOMING_HANDOFF] handing off pending callId=$callId to foreground Flutter")
+                VorynCallPlatformBridge.notifyIncomingCall(callId, callerName, callType)
+            }
+        }
     }
 
     override fun onPause() {
         super.onPause()
         isAppInForeground = false
+        if (!hasActiveCallPresentation) {
+            applyShowWhenLocked(false)
+        }
     }
 
     override fun onDestroy() {
+        hasActiveCallPresentation = false
+        applyShowWhenLocked(false)
+        VorynProximityController.releaseAll("app_destroy")
         if (activeInstance == this) {
             activeInstance = null
         }
@@ -173,6 +171,12 @@ class MainActivity : FlutterActivity() {
         val callId = launchData?.get("callId") ?: ""
         val actionId = launchData?.get("actionId") ?: ""
         Log.d("VorynBoot", "[BOOT] onNewIntent action=$action actionId=$actionId callId=$callId")
+        Log.d("VorynCall", "[LOCKSCREEN] MainActivity started reason=$action")
+
+        if (callId.isNotBlank() && VorynCallHostManager.isCallOwnedByLockedCall(callId)) {
+            Log.d("VorynCall", "[HOST_OWNERSHIP] MainActivity suppressing onNewIntent for callId=$callId (owned by LOCKED_CALL)")
+            return
+        }
 
         if (actionId == "accept" || action == "ACCEPT_CALL") {
             val acceptTimestamp = intent.getLongExtra("accept_timestamp", 0L)
@@ -187,9 +191,11 @@ class MainActivity : FlutterActivity() {
             IncomingCallActivity.dismiss()
         }
 
-        updateLockScreenCallPresentation(intent)
+        if (!hasActiveCallPresentation) {
+            applyShowWhenLocked(false)
+        }
         if (launchData != null) {
-            methodChannel?.invokeMethod("onCallLaunchIntent", launchData)
+            bridge?.methodChannel?.invokeMethod("onCallLaunchIntent", launchData)
         }
     }
 
@@ -248,21 +254,6 @@ class MainActivity : FlutterActivity() {
                     WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                         WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
                 )
-            }
-        }
-    }
-
-    private fun updateLockScreenCallPresentation(intent: Intent?) {
-        val actionId = intent?.getStringExtra("action_id") ?: intent?.getStringExtra("action")
-        val isAcceptedCall = actionId == "accept" || intent?.action == "ACCEPT_CALL"
-        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-
-        if (isAcceptedCall) {
-            applyShowWhenLocked(true)
-        } else {
-            applyShowWhenLocked(false)
-            if (km.isKeyguardLocked && actionId == "decline") {
-                moveTaskToBack(true)
             }
         }
     }

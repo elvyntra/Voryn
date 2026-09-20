@@ -11,6 +11,7 @@ import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
 import 'voryn_call_history_service.dart';
 import 'voryn_call_latency_tracker.dart';
+import 'voryn_call_runtime_coordinator.dart';
 import 'voryn_call_service.dart';
 import 'widgets/call_avatar_rings.dart';
 import 'widgets/call_top_bar.dart';
@@ -81,6 +82,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   Future<void> _verifyAndLoad() async {
     try {
+      if (VorynCallRuntimeCoordinator.isAcceptInFlight(widget.callId)) {
+        debugPrint(
+          '[CALL ${widget.callId}] accept in flight during incoming verify, ignoring incoming UI',
+        );
+        _exitSafely();
+        return;
+      }
+
       final active = await const VorynCallHistoryService()
           .loadIncomingActiveCall(callId: widget.callId);
 
@@ -125,32 +134,36 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     if (_resolved) return;
     _resolved = true;
     _callSubscription?.unsubscribe();
-    final acceptMs = await LockScreenService.getElapsedRealtimeMs();
-    final tracker = VorynCallLatencyTracker.start(
-      callId: widget.callId,
-      baseTimestampMs: acceptMs,
-    );
-    await tracker.stage('flutter_accept_received');
-    VorynFirebaseMessaging.clearPendingIncomingCall(widget.callId);
-    await LockScreenService.cancelNativeIncomingCall(
-      widget.callId,
-      reason: 'accept',
-    );
+    try {
+      await VorynCallRuntimeCoordinator.runAcceptOnce(widget.callId, () async {
+        final acceptMs = await LockScreenService.getElapsedRealtimeMs();
+        final tracker = VorynCallLatencyTracker.start(
+          callId: widget.callId,
+          baseTimestampMs: acceptMs,
+        );
+        await tracker.stage('flutter_accept_received');
+        VorynFirebaseMessaging.clearPendingIncomingCall(widget.callId);
+        await LockScreenService.cancelNativeIncomingCall(
+          widget.callId,
+          reason: 'accept',
+        );
 
-    final isVideo = _call?.callType == 'video';
-    if (!mounted) return;
+        final isVideo = _call?.callType == 'video';
+        if (!mounted) return;
 
-    if (isVideo) {
-      context.pushReplacement(
-        '/active-video-call/${widget.callId}',
-        extra: {'user': _user},
-      );
-    } else {
-      context.pushReplacement(
-        '/active-audio-call/${widget.callId}',
-        extra: {'user': _user},
-      );
-    }
+        if (isVideo) {
+          context.pushReplacement(
+            '/active-video-call/${widget.callId}',
+            extra: {'user': _user},
+          );
+        } else {
+          context.pushReplacement(
+            '/active-audio-call/${widget.callId}',
+            extra: {'user': _user},
+          );
+        }
+      });
+    } catch (_) {}
   }
 
   Future<void> _decline() async {
@@ -173,10 +186,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   @override
   void dispose() {
     _callSubscription?.unsubscribe();
-    LockScreenService.cancelNativeIncomingCall(
-      widget.callId,
-      reason: 'activity_destroy',
-    );
     super.dispose();
   }
 
