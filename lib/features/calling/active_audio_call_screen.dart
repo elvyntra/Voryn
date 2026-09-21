@@ -451,6 +451,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       // Do not expose the normal app shell over lock screen
       return;
     }
+    await LockScreenService.minimizeActiveCall();
     if (mounted) {
       if (context.canPop()) {
         context.pop();

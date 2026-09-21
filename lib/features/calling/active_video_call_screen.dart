@@ -514,6 +514,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     if (isLocked) {
       return;
     }
+    await LockScreenService.minimizeActiveCall();
     if (mounted) {
       if (context.canPop()) {
         context.pop();

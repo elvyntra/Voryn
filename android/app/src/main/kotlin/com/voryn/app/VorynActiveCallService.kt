@@ -147,10 +147,10 @@ class VorynActiveCallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = "Voryn call"
+        val title = "Voryn call in progress"
         val contentText = "$callerName · ${if (callType == "video") "Video call" else "Audio call"}"
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(contentText)
@@ -161,7 +161,24 @@ class VorynActiveCallService : Service() {
             .setContentIntent(returnPendingIntent)
             .addAction(0, "Return to call", returnPendingIntent)
             .addAction(0, "End", endPendingIntent)
-            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val person = androidx.core.app.Person.Builder()
+                    .setName(callerName)
+                    .setImportant(true)
+                    .build()
+                val callStyle = NotificationCompat.CallStyle.forOngoingCall(
+                    person,
+                    endPendingIntent
+                )
+                builder.setStyle(callStyle)
+            } catch (e: Exception) {
+                Log.w(TAG, "[ACTIVE_SERVICE] CallStyle.forOngoingCall fallback: ${e.message}")
+            }
+        }
+
+        val notification = builder.build()
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -169,8 +186,8 @@ class VorynActiveCallService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-            Log.d(TAG, "[ACTIVE_SERVICE] start callId=$callId")
-            Log.d(TAG, "[ACTIVE_SERVICE] notification posted")
+            Log.d(TAG, "[ACTIVE_CALL_SERVICE] start callId=$callId")
+            Log.d(TAG, "[ACTIVE_NOTIFICATION] posted callId=$callId")
         } catch (e: Exception) {
             Log.e(TAG, "[ACTIVE_SERVICE] startForeground error: ${e.message}")
         }

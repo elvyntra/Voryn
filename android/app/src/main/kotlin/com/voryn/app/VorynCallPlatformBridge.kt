@@ -176,9 +176,17 @@ class VorynCallPlatformBridge(
                     val callId = call.argument<String>("callId") ?: ""
                     val callerName = call.argument<String>("callerName") ?: "Voryn User"
                     val callType = call.argument<String>("callType") ?: "audio"
+                    val originArg = call.argument<String>("origin")
                     if (callId.isNotBlank()) {
                         val host = if (activity is VorynCallActivity) "LOCKED_CALL" else "MAIN"
-                        VorynCallStateManager.markCallActive(activity, callId, callerName, callType, host)
+                        val origin = when {
+                            originArg == "IN_APP" -> VorynCallHostManager.CallPresentationOrigin.IN_APP
+                            originArg == "EXTERNAL" -> VorynCallHostManager.CallPresentationOrigin.EXTERNAL
+                            activity is MainActivity -> VorynCallHostManager.CallPresentationOrigin.IN_APP
+                            else -> VorynCallHostManager.getOrigin(callId)
+                        }
+                        VorynCallHostManager.setOrigin(callId, origin)
+                        VorynCallStateManager.markCallActive(activity, callId, callerName, callType, host, origin)
                         VorynActiveCallService.start(activity, callId, callerName, callType)
                         val snapshot = VorynCallStateManager.getActiveCallSnapshot(activity)
                         notifyActiveCallStateChanged(snapshot)
@@ -195,18 +203,47 @@ class VorynCallPlatformBridge(
                 "minimizeActiveCall" -> {
                     val callId = VorynCallStateManager.getCurrentCallId(activity) ?: ""
                     val state = VorynCallStateManager.getCurrentState(activity)
-                    Log.d(TAG, "[CALL_MINIMIZE] state=$state presentation=MINIMIZED callId=$callId")
+                    val owner = VorynCallHostManager.getActiveHost()
+                    val origin = VorynCallStateManager.getCallOrigin(activity)
+                    Log.d(TAG, "[CALL_MINIMIZE] state=$state presentation=MINIMIZED callId=$callId owner=$owner origin=$origin")
                     if (callId.isNotBlank()) {
                         VorynCallStateManager.setCallPresentationState(activity, callId, VorynCallStateManager.PresentationState.MINIMIZED)
                         val snapshot = VorynCallStateManager.getActiveCallSnapshot(activity)
                         notifyActiveCallStateChanged(snapshot)
+                        val callerName = VorynCallStateManager.getCallerName(activity)
+                        val callType = VorynCallStateManager.getCallType(activity)
+                        VorynActiveCallService.start(activity, callId, callerName, callType)
                     }
-                    MainActivity.showMainAppDuringCall(activity)
-                    activity.moveTaskToBack(true)
+                    when {
+                        owner == VorynCallHostManager.HostType.MAIN && origin == VorynCallHostManager.CallPresentationOrigin.IN_APP -> {
+                            Log.d(TAG, "[CALL_PRESENTATION] callId=$callId owner=MAIN origin=IN_APP action=minimize target=VORYN_SHELL")
+                            // In-app inside MainActivity: do NOT move task to back
+                        }
+                        owner == VorynCallHostManager.HostType.LOCKED_CALL && origin == VorynCallHostManager.CallPresentationOrigin.EXTERNAL -> {
+                            Log.d(TAG, "[CALL_PRESENTATION] callId=$callId owner=LOCKED_CALL origin=EXTERNAL action=minimize target=SYSTEM")
+                            activity.moveTaskToBack(true)
+                            Log.d(TAG, "[CALL_ACTIVITY] moveTaskToBack result=true")
+                        }
+                        owner == VorynCallHostManager.HostType.LOCKED_CALL && origin == VorynCallHostManager.CallPresentationOrigin.IN_APP -> {
+                            Log.d(TAG, "[CALL_PRESENTATION] callId=$callId owner=LOCKED_CALL origin=IN_APP action=minimize target=VORYN_SHELL")
+                            MainActivity.showMainAppDuringCall(activity)
+                            activity.moveTaskToBack(true)
+                            Log.d(TAG, "[CALL_ACTIVITY] moveTaskToBack result=true")
+                        }
+                        else -> {
+                            Log.w(TAG, "[CALL_PRESENTATION] unexpected combination: callId=$callId owner=$owner origin=$origin action=minimize")
+                            if (activity is VorynCallActivity) {
+                                activity.moveTaskToBack(true)
+                                Log.d(TAG, "[CALL_ACTIVITY] moveTaskToBack result=true")
+                            }
+                        }
+                    }
                     result.success(true)
                 }
                 "returnToActiveCall" -> {
                     val callId = call.argument<String>("callId") ?: VorynCallStateManager.getCurrentCallId(activity) ?: ""
+                    val owner = VorynCallHostManager.getActiveHost()
+                    Log.d(TAG, "[MINI_CALL] callId=$callId owner=$owner action=restore_existing_call_activity")
                     val currentPres = VorynCallStateManager.getPresentationState(activity)
                     if (currentPres == VorynCallStateManager.PresentationState.FULLSCREEN) {
                         Log.d(TAG, "[CALL_RESTORE] already fullscreen, ignoring duplicate returnToActiveCall callId=$callId")
@@ -237,12 +274,20 @@ class VorynCallPlatformBridge(
                     val callId = call.argument<String>("callId") ?: ""
                     val callType = call.argument<String>("callType") ?: "audio"
                     val callerName = call.argument<String>("callerName") ?: "Voryn User"
-                    Log.d(TAG, "[FOREGROUND_ACCEPT] acceptIncomingCall callId=$callId callType=$callType")
+                    val originArg = call.argument<String>("origin")
+                    val origin = when {
+                        originArg == "IN_APP" -> VorynCallHostManager.CallPresentationOrigin.IN_APP
+                        originArg == "EXTERNAL" -> VorynCallHostManager.CallPresentationOrigin.EXTERNAL
+                        activity is MainActivity -> VorynCallHostManager.CallPresentationOrigin.IN_APP
+                        else -> VorynCallHostManager.CallPresentationOrigin.EXTERNAL
+                    }
+                    Log.d(TAG, "[FOREGROUND_ACCEPT] acceptIncomingCall callId=$callId callType=$callType origin=$origin")
                     val ok = IncomingCallNotificationManager.setPendingCallAccepting(activity, callId)
                     if (ok) {
                         IncomingCallRingtoneManager.stop("accept", callId)
                         IncomingCallNotificationManager.cancelIncomingCall(activity, callId, "accept")
-                        VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, VorynCallStateManager.CallState.ACCEPTING)
+                        VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, VorynCallStateManager.CallState.ACCEPTING, origin)
+                        VorynActiveCallService.start(activity, callId, callerName, callType)
                         val acceptIntent = Intent(activity, VorynCallActivity::class.java).apply {
                             action = "ACCEPT_CALL"
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -253,6 +298,9 @@ class VorynCallPlatformBridge(
                             putExtra("call_type", callType)
                             putExtra("callType", callType)
                             putExtra("caller_name", callerName)
+                            putExtra("callerName", callerName)
+                            putExtra("call_origin", origin.name)
+                            putExtra("origin", origin.name)
                         }
                         activity.startActivity(acceptIntent)
                     } else {

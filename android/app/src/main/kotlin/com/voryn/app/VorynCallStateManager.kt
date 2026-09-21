@@ -15,6 +15,7 @@ object VorynCallStateManager {
     private const val KEY_RECEIVED_AT = "received_at"
     private const val KEY_STARTED_AT = "started_at"
     private const val KEY_PRESENTATION_STATE = "presentation_state"
+    private const val KEY_CALL_ORIGIN = "call_origin"
 
     enum class CallState {
         NONE,
@@ -35,6 +36,9 @@ object VorynCallStateManager {
 
     @Volatile
     private var inMemoryPresentation: PresentationState = PresentationState.FULLSCREEN
+
+    @Volatile
+    private var inMemoryOrigin: VorynCallHostManager.CallPresentationOrigin? = null
 
     @Volatile
     private var inMemoryCallId: String? = null
@@ -120,14 +124,29 @@ object VorynCallStateManager {
         callId: String,
         callerName: String = "Voryn User",
         callType: String = "audio",
-        host: String = "LOCKED_CALL"
+        host: String = "LOCKED_CALL",
+        origin: VorynCallHostManager.CallPresentationOrigin? = null
     ) {
         inMemoryState = CallState.ACTIVE
         inMemoryPresentation = PresentationState.FULLSCREEN
         inMemoryCallId = callId
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit()
+        val existingOriginStr = prefs.getString(KEY_CALL_ORIGIN, null)
+        val resolvedOrigin = if (inMemoryOrigin != null) {
+            inMemoryOrigin!!
+        } else if (existingOriginStr != null) {
+            try {
+                VorynCallHostManager.CallPresentationOrigin.valueOf(existingOriginStr)
+            } catch (_: Exception) {
+                origin ?: VorynCallHostManager.getOrigin(callId)
+            }
+        } else {
+            origin ?: VorynCallHostManager.getOrigin(callId)
+        }
+        inMemoryOrigin = resolvedOrigin
+
+        val editor = prefs.edit()
             .putString(KEY_CALL_ID, callId)
             .putString(KEY_CALL_STATE, CallState.ACTIVE.name)
             .putString(KEY_PRESENTATION_STATE, PresentationState.FULLSCREEN.name)
@@ -135,10 +154,43 @@ object VorynCallStateManager {
             .putString(KEY_CALL_TYPE, callType)
             .putString(KEY_HOST, host)
             .putLong(KEY_STARTED_AT, System.currentTimeMillis())
-            .apply()
+
+        if (existingOriginStr == null) {
+            editor.putString(KEY_CALL_ORIGIN, resolvedOrigin.name)
+        }
+        editor.apply()
 
         VorynCallHostManager.updateState(callId, CallState.ACTIVE)
-        Log.d(TAG, "[CALL_STATE] ACTIVE callId=$callId")
+        Log.d(TAG, "[CALL_STATE] ACTIVE callId=$callId origin=$resolvedOrigin")
+    }
+
+    @Synchronized
+    fun getCallOrigin(context: Context): VorynCallHostManager.CallPresentationOrigin {
+        if (inMemoryOrigin != null) return inMemoryOrigin!!
+        val hostOrigin = VorynCallHostManager.getOrigin()
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val origStr = prefs.getString(KEY_CALL_ORIGIN, null)
+        if (origStr != null) {
+            inMemoryOrigin = try {
+                VorynCallHostManager.CallPresentationOrigin.valueOf(origStr)
+            } catch (_: Exception) {
+                hostOrigin
+            }
+            return inMemoryOrigin!!
+        }
+        return hostOrigin
+    }
+
+    @Synchronized
+    fun getCallerName(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"
+    }
+
+    @Synchronized
+    fun getCallType(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"
     }
 
     @Synchronized
@@ -173,10 +225,14 @@ object VorynCallStateManager {
         val callId = getCurrentCallId(context) ?: return null
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val presentation = getPresentationState(context)
+        val origin = getCallOrigin(context)
+        val host = prefs.getString(KEY_HOST, null) ?: VorynCallHostManager.getActiveHost().name
         return mapOf(
             "callId" to callId,
             "state" to state.name,
             "presentation" to presentation.name,
+            "origin" to origin.name,
+            "host" to host,
             "callType" to (prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"),
             "displayName" to (prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"),
             "startedAt" to prefs.getLong(KEY_STARTED_AT, 0L)
@@ -190,6 +246,7 @@ object VorynCallStateManager {
         if (newState == CallState.TERMINAL || newState == CallState.NONE) {
             inMemoryCallId = null
             inMemoryPresentation = PresentationState.FULLSCREEN
+            inMemoryOrigin = null
             VorynCallHostManager.releaseCall(callId, VorynCallHostManager.getActiveHost())
         } else {
             inMemoryCallId = callId

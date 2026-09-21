@@ -64,7 +64,28 @@ class VorynCallActivity : FlutterActivity() {
         if (callId.isNotBlank()) {
             val cur = VorynCallStateManager.getCurrentState(this)
             val st = if (cur == VorynCallStateManager.CallState.ACTIVE) cur else VorynCallStateManager.CallState.ACCEPTING
-            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, st)
+            val originStr = intent?.getStringExtra("call_origin")
+                ?: intent?.getStringExtra("origin")
+                ?: initialCallLaunch?.get("origin")
+            val origin = if (originStr == "IN_APP") {
+                VorynCallHostManager.CallPresentationOrigin.IN_APP
+            } else if (originStr == "EXTERNAL") {
+                VorynCallHostManager.CallPresentationOrigin.EXTERNAL
+            } else {
+                VorynCallHostManager.getOrigin(callId)
+            }
+            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, st, origin)
+        }
+
+        if (action == "RETURN_TO_CALL") {
+            val targetId = if (callId.isNotBlank()) callId else (currentCallId ?: "")
+            val owner = VorynCallHostManager.getActiveHost()
+            Log.d("VorynCall", "[ACTIVE_NOTIFICATION] tapped callId=$targetId")
+            Log.d("VorynCall", "[ACTIVE_NOTIFICATION] callId=$targetId action=restore owner=$owner result=reused_existing_activity")
+            Log.d("VorynCall", "[CALL_ACTIVITY] onNewIntent callId=$targetId decision=reuse_existing_active_call")
+            VorynCallStateManager.setCallPresentationState(this, targetId, VorynCallStateManager.PresentationState.FULLSCREEN)
+            val snapshot = VorynCallStateManager.getActiveCallSnapshot(this)
+            VorynCallPlatformBridge.notifyActiveCallStateChanged(snapshot)
         }
 
         val acceptTimestamp = intent?.getLongExtra("accept_timestamp", 0L) ?: 0L
@@ -187,12 +208,23 @@ class VorynCallActivity : FlutterActivity() {
         Log.d("VorynCall", "[CALL_ACTIVITY] onNewIntent action=$action callId=$callId")
 
         if (action == "RETURN_TO_CALL" || launchData?.get("actionId") == "return_to_call") {
-            Log.d("VorynCall", "[CALL_ACTIVITY] return to active callId=$callId")
             val targetId = if (callId.isNotBlank()) callId else (currentCallId ?: "")
-            if (targetId.isNotBlank()) {
+            val owner = VorynCallHostManager.getActiveHost()
+            val state = VorynCallStateManager.getCurrentState(this)
+            val activeId = VorynCallStateManager.getCurrentCallId(this)
+
+            if (targetId.isNotBlank() && (targetId == activeId || activeId == null) &&
+                VorynCallHostManager.hasActiveOwner(targetId) &&
+                (state == VorynCallStateManager.CallState.ACCEPTING || state == VorynCallStateManager.CallState.ACTIVE)
+            ) {
+                Log.d("VorynCall", "[ACTIVE_NOTIFICATION] tapped callId=$targetId")
+                Log.d("VorynCall", "[ACTIVE_NOTIFICATION] callId=$targetId action=restore owner=$owner result=reused_existing_activity")
+                Log.d("VorynCall", "[CALL_ACTIVITY] onNewIntent callId=$targetId decision=reuse_existing_active_call")
                 VorynCallStateManager.setCallPresentationState(this, targetId, VorynCallStateManager.PresentationState.FULLSCREEN)
                 val snapshot = VorynCallStateManager.getActiveCallSnapshot(this)
                 VorynCallPlatformBridge.notifyActiveCallStateChanged(snapshot)
+            } else {
+                Log.w("VorynCall", "[ACTIVE_NOTIFICATION] restore rejected or state invalid: targetId=$targetId activeId=$activeId state=$state owner=$owner")
             }
             return
         }
@@ -223,6 +255,9 @@ class VorynCallActivity : FlutterActivity() {
         val callType = intent.getStringExtra("call_type")
             ?: intent.getStringExtra("callType")
             ?: "audio"
+        val origin = intent.getStringExtra("call_origin")
+            ?: intent.getStringExtra("origin")
+            ?: ""
         val acceptTimestamp = intent.getLongExtra("accept_timestamp", 0L)
 
         return mapOf(
@@ -230,6 +265,7 @@ class VorynCallActivity : FlutterActivity() {
             "actionId" to actionId,
             "action" to action,
             "callType" to callType,
+            "origin" to origin,
             "acceptTimestamp" to acceptTimestamp.toString()
         )
     }

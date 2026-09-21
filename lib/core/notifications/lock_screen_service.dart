@@ -230,6 +230,7 @@ class LockScreenService {
     required String callId,
     required String callType,
     required String callerName,
+    String origin = 'IN_APP',
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return;
@@ -239,6 +240,7 @@ class LockScreenService {
         'callId': callId,
         'callType': callType,
         'callerName': callerName,
+        'origin': origin,
       });
     } catch (_) {}
   }

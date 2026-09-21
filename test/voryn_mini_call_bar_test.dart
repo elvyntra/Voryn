@@ -50,6 +50,8 @@ void main() {
         'callId': 'call-123',
         'state': 'ACTIVE',
         'presentation': 'MINIMIZED',
+        'origin': 'EXTERNAL',
+        'host': 'LOCKED_CALL',
         'callType': 'video',
         'displayName': 'Bob Builder',
         'startedAt': 50000,
@@ -58,10 +60,29 @@ void main() {
       expect(snapshot.callId, 'call-123');
       expect(snapshot.state, 'ACTIVE');
       expect(snapshot.presentation, 'MINIMIZED');
+      expect(snapshot.origin, 'EXTERNAL');
+      expect(snapshot.host, 'LOCKED_CALL');
+      expect(snapshot.isExternal, isTrue);
+      expect(snapshot.isInApp, isFalse);
       expect(snapshot.callType, 'video');
       expect(snapshot.displayName, 'Bob Builder');
       expect(snapshot.startedAt, 50000);
       expect(snapshot.shouldShowMiniBar, isTrue);
+    });
+
+    test('origin evaluates isInApp and isExternal correctly', () {
+      const inApp = ActiveCallSnapshot(
+        callId: 'call-in-app',
+        state: 'ACTIVE',
+        presentation: 'MINIMIZED',
+        origin: 'IN_APP',
+        host: 'MAIN',
+        callType: 'audio',
+        displayName: 'Alice',
+        startedAt: 1000,
+      );
+      expect(inApp.isInApp, isTrue);
+      expect(inApp.isExternal, isFalse);
     });
   });
 

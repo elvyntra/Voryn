@@ -11,6 +11,8 @@ class ActiveCallSnapshot {
     required this.callId,
     required this.state,
     required this.presentation,
+    this.origin = 'EXTERNAL',
+    this.host = 'LOCKED_CALL',
     required this.callType,
     required this.displayName,
     required this.startedAt,
@@ -19,12 +21,16 @@ class ActiveCallSnapshot {
   final String callId;
   final String state;
   final String presentation;
+  final String origin;
+  final String host;
   final String callType;
   final String displayName;
   final int startedAt;
 
   bool get isActive => state == 'ACTIVE';
   bool get isMinimized => presentation == 'MINIMIZED';
+  bool get isInApp => origin == 'IN_APP';
+  bool get isExternal => origin == 'EXTERNAL';
   bool get shouldShowMiniBar => isActive && isMinimized;
 
   factory ActiveCallSnapshot.fromMap(Map<dynamic, dynamic> map) {
@@ -32,6 +38,8 @@ class ActiveCallSnapshot {
       callId: map['callId']?.toString() ?? '',
       state: map['state']?.toString() ?? '',
       presentation: map['presentation']?.toString() ?? 'FULLSCREEN',
+      origin: map['origin']?.toString() ?? 'EXTERNAL',
+      host: map['host']?.toString() ?? 'LOCKED_CALL',
       callType: map['callType']?.toString() ?? 'audio',
       displayName: map['displayName']?.toString() ?? 'Voryn User',
       startedAt: (map['startedAt'] as num?)?.toInt() ?? 0,
@@ -43,6 +51,8 @@ class ActiveCallSnapshot {
       'callId': callId,
       'state': state,
       'presentation': presentation,
+      'origin': origin,
+      'host': host,
       'callType': callType,
       'displayName': displayName,
       'startedAt': startedAt,
@@ -57,6 +67,8 @@ class ActiveCallSnapshot {
           callId == other.callId &&
           state == other.state &&
           presentation == other.presentation &&
+          origin == other.origin &&
+          host == other.host &&
           callType == other.callType &&
           displayName == other.displayName &&
           startedAt == other.startedAt;
@@ -66,6 +78,8 @@ class ActiveCallSnapshot {
     callId,
     state,
     presentation,
+    origin,
+    host,
     callType,
     displayName,
     startedAt,
@@ -73,7 +87,7 @@ class ActiveCallSnapshot {
 
   @override
   String toString() =>
-      'ActiveCallSnapshot(callId: $callId, state: $state, presentation: $presentation, callType: $callType, displayName: $displayName, startedAt: $startedAt)';
+      'ActiveCallSnapshot(callId: $callId, state: $state, presentation: $presentation, origin: $origin, host: $host, callType: $callType, displayName: $displayName, startedAt: $startedAt)';
 }
 
 /// Cross-platform presentation coordinator managing the mini-call bar UI state.
