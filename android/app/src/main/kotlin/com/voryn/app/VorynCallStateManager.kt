@@ -133,16 +133,18 @@ object VorynCallStateManager {
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val existingOriginStr = prefs.getString(KEY_CALL_ORIGIN, null)
-        val resolvedOrigin = if (inMemoryOrigin != null) {
-            inMemoryOrigin!!
-        } else if (existingOriginStr != null) {
-            try {
-                VorynCallHostManager.CallPresentationOrigin.valueOf(existingOriginStr)
-            } catch (_: Exception) {
-                origin ?: VorynCallHostManager.getOrigin(callId)
+        val hostOrigin = VorynCallHostManager.getOrigin(callId)
+        val resolvedOrigin = when {
+            inMemoryOrigin != null -> inMemoryOrigin!!
+            existingOriginStr != null -> {
+                try {
+                    VorynCallHostManager.CallPresentationOrigin.valueOf(existingOriginStr)
+                } catch (_: Exception) {
+                    hostOrigin
+                }
             }
-        } else {
-            origin ?: VorynCallHostManager.getOrigin(callId)
+            hostOrigin == VorynCallHostManager.CallPresentationOrigin.EXTERNAL -> hostOrigin
+            else -> origin ?: hostOrigin
         }
         inMemoryOrigin = resolvedOrigin
 

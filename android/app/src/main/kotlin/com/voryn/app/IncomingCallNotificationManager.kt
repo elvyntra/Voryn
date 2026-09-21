@@ -163,14 +163,23 @@ object IncomingCallNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // 3. Accept action (Broadcast to IncomingCallActionReceiver to launch VorynCallActivity)
-        val acceptIntent = Intent(context, IncomingCallActionReceiver::class.java).apply {
-            action = "com.voryn.app.ACTION_ACCEPT_CALL"
+        // 3. Accept action (Direct activity start to VorynCallActivity to avoid notification trampoline)
+        val acceptIntent = Intent(context, VorynCallActivity::class.java).apply {
+            action = "com.voryn.app.ACTION_ACCEPT_INCOMING_CALL"
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("action_id", "accept")
+            putExtra("action", "accept")
             putExtra("call_id", callId)
+            putExtra("callId", callId)
             putExtra("call_type", callType)
+            putExtra("callType", callType)
             putExtra("caller_name", callerName)
+            putExtra("callerName", callerName)
+            putExtra("call_origin", "EXTERNAL")
+            putExtra("origin", "EXTERNAL")
+            putExtra("accept_timestamp", SystemClock.elapsedRealtime())
         }
-        val acceptPendingIntent = PendingIntent.getBroadcast(
+        val acceptPendingIntent = PendingIntent.getActivity(
             context,
             (callId + "_accept").hashCode(),
             acceptIntent,

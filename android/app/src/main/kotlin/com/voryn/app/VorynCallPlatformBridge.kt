@@ -179,11 +179,18 @@ class VorynCallPlatformBridge(
                     val originArg = call.argument<String>("origin")
                     if (callId.isNotBlank()) {
                         val host = if (activity is VorynCallActivity) "LOCKED_CALL" else "MAIN"
+                        val nativeOrigin = VorynCallHostManager.getOrigin(callId)
                         val origin = when {
                             originArg == "IN_APP" -> VorynCallHostManager.CallPresentationOrigin.IN_APP
                             originArg == "EXTERNAL" -> VorynCallHostManager.CallPresentationOrigin.EXTERNAL
-                            activity is MainActivity -> VorynCallHostManager.CallPresentationOrigin.IN_APP
-                            else -> VorynCallHostManager.getOrigin(callId)
+                            activity is MainActivity -> {
+                                if (VorynCallHostManager.getActiveCallId() == callId && nativeOrigin == VorynCallHostManager.CallPresentationOrigin.EXTERNAL) {
+                                    nativeOrigin
+                                } else {
+                                    VorynCallHostManager.CallPresentationOrigin.IN_APP
+                                }
+                            }
+                            else -> nativeOrigin
                         }
                         VorynCallHostManager.setOrigin(callId, origin)
                         VorynCallStateManager.markCallActive(activity, callId, callerName, callType, host, origin)
@@ -275,7 +282,9 @@ class VorynCallPlatformBridge(
                     val callType = call.argument<String>("callType") ?: "audio"
                     val callerName = call.argument<String>("callerName") ?: "Voryn User"
                     val originArg = call.argument<String>("origin")
+                    val existingOrigin = VorynCallHostManager.getOrigin(callId)
                     val origin = when {
+                        VorynCallHostManager.getActiveCallId() == callId && existingOrigin == VorynCallHostManager.CallPresentationOrigin.EXTERNAL -> existingOrigin
                         originArg == "IN_APP" -> VorynCallHostManager.CallPresentationOrigin.IN_APP
                         originArg == "EXTERNAL" -> VorynCallHostManager.CallPresentationOrigin.EXTERNAL
                         activity is MainActivity -> VorynCallHostManager.CallPresentationOrigin.IN_APP

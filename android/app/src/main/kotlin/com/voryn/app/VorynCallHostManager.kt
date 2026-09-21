@@ -40,6 +40,11 @@ object VorynCallHostManager {
         callState = state
         if (callOrigin == null) {
             callOrigin = origin
+        } else if (callOrigin != origin) {
+            Log.d(TAG, "[CALL_ORIGIN] callId=$callId existing=$callOrigin requested=$origin decision=ignore_immutable_origin")
+        }
+        if (host == HostType.LOCKED_CALL && callOrigin == CallPresentationOrigin.IN_APP) {
+            Log.w(TAG, "[CALL_INVARIANT] suspicious combination: owner=LOCKED_CALL origin=IN_APP callId=$callId")
         }
         Log.d(TAG, "[CALL_HOST] callId=$callId owner=$host state=$state origin=$callOrigin")
         Log.d(TAG, "[HOST_OWNERSHIP] native host ownership = $host callId=$callId origin=$callOrigin")
@@ -68,6 +73,8 @@ object VorynCallHostManager {
             if (callOrigin == null) {
                 callOrigin = origin
                 Log.d(TAG, "[CALL_HOST] callId=$callId owner=$activeHost state=$callState origin=$origin")
+            } else if (callOrigin != origin) {
+                Log.d(TAG, "[CALL_ORIGIN] callId=$callId existing=$callOrigin requested=$origin decision=ignore_immutable_origin")
             }
         }
     }

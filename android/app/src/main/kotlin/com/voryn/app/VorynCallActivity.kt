@@ -59,22 +59,34 @@ class VorynCallActivity : FlutterActivity() {
         val callId = initialCallLaunch?.get("callId") ?: ""
         val actionId = initialCallLaunch?.get("actionId") ?: ""
         val action = intent?.action ?: ""
+        val callType = initialCallLaunch?.get("callType") ?: "audio"
+        val callerName = intent?.getStringExtra("caller_name")
+            ?: intent?.getStringExtra("callerName")
+            ?: "Voryn User"
         currentCallId = callId.ifBlank { null }
+
+        val originStr = intent?.getStringExtra("call_origin")
+            ?: intent?.getStringExtra("origin")
+            ?: initialCallLaunch?.get("origin")
+        val origin = if (originStr == "IN_APP") {
+            VorynCallHostManager.CallPresentationOrigin.IN_APP
+        } else if (originStr == "EXTERNAL") {
+            VorynCallHostManager.CallPresentationOrigin.EXTERNAL
+        } else {
+            VorynCallHostManager.getOrigin(callId)
+        }
+
+        if (action == "com.voryn.app.ACTION_ACCEPT_INCOMING_CALL" || action == "ACCEPT_CALL" || actionId == "accept") {
+            Log.d("VorynCall", "[LOCK_ACCEPT] accept_tap callId=$callId")
+            Log.d("VorynCall", "[CALL_LATENCY] accept_tap_native callId=$callId elapsed=0ms")
+            IncomingCallNotificationManager.setPendingCallAccepting(this, callId)
+        }
 
         if (callId.isNotBlank()) {
             val cur = VorynCallStateManager.getCurrentState(this)
             val st = if (cur == VorynCallStateManager.CallState.ACTIVE) cur else VorynCallStateManager.CallState.ACCEPTING
-            val originStr = intent?.getStringExtra("call_origin")
-                ?: intent?.getStringExtra("origin")
-                ?: initialCallLaunch?.get("origin")
-            val origin = if (originStr == "IN_APP") {
-                VorynCallHostManager.CallPresentationOrigin.IN_APP
-            } else if (originStr == "EXTERNAL") {
-                VorynCallHostManager.CallPresentationOrigin.EXTERNAL
-            } else {
-                VorynCallHostManager.getOrigin(callId)
-            }
             VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, st, origin)
+            VorynActiveCallService.start(this, callId, callerName, callType)
         }
 
         if (action == "RETURN_TO_CALL") {
@@ -100,7 +112,7 @@ class VorynCallActivity : FlutterActivity() {
         }
         IncomingCallActivity.dismiss()
 
-        Log.d("VorynCall", "[CALL_ACTIVITY] initialCallLaunch callId=$callId actionId=$actionId action=$action")
+        Log.d("VorynCall", "[CALL_ACTIVITY] initialCallLaunch callId=$callId actionId=$actionId action=$action origin=$origin")
     }
 
     override fun shouldDestroyEngineWithHost(): Boolean = false
@@ -227,6 +239,30 @@ class VorynCallActivity : FlutterActivity() {
                 Log.w("VorynCall", "[ACTIVE_NOTIFICATION] restore rejected or state invalid: targetId=$targetId activeId=$activeId state=$state owner=$owner")
             }
             return
+        }
+
+        if (action == "com.voryn.app.ACTION_ACCEPT_INCOMING_CALL" || action == "ACCEPT_CALL" || launchData?.get("actionId") == "accept") {
+            if (callId.isNotBlank()) {
+                if (callId == currentCallId) {
+                    Log.d("VorynCall", "[CALL_ACTIVITY] duplicate accept intent for active callId=$callId, ignoring")
+                    return
+                }
+                if (currentCallId != null && callId != currentCallId) {
+                    Log.w("VorynCall", "[CALL_ACTIVITY] incoming accept callId=$callId while active callId=$currentCallId, rejecting to protect session")
+                    return
+                }
+                IncomingCallNotificationManager.setPendingCallAccepting(this, callId)
+                IncomingCallRingtoneManager.stop("accept", callId)
+                IncomingCallNotificationManager.cancelIncomingCall(this, callId, "accept")
+                IncomingCallActivity.dismiss()
+                val originStr = intent.getStringExtra("call_origin") ?: intent.getStringExtra("origin") ?: launchData?.get("origin")
+                val origin = if (originStr == "IN_APP") VorynCallHostManager.CallPresentationOrigin.IN_APP else VorynCallHostManager.CallPresentationOrigin.EXTERNAL
+                val callerName = intent.getStringExtra("caller_name") ?: intent.getStringExtra("callerName") ?: "Voryn User"
+                val callType = intent.getStringExtra("call_type") ?: intent.getStringExtra("callType") ?: "audio"
+                currentCallId = callId
+                VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, VorynCallStateManager.CallState.ACCEPTING, origin)
+                VorynActiveCallService.start(this, callId, callerName, callType)
+            }
         }
 
         if (callId.isNotBlank() && callId == currentCallId) {
