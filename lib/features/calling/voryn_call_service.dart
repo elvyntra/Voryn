@@ -5,6 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/backend/voryn_backend.dart';
 import '../../core/notifications/lock_screen_service.dart';
 import '../../core/presence/voryn_presence_service.dart';
+import 'voryn_active_call_presentation_service.dart';
+import 'voryn_call_runtime_coordinator.dart';
 
 class VorynCallRequest {
   const VorynCallRequest({this.id, this.error});
@@ -131,6 +133,10 @@ class VorynCallService {
   Future<VorynPendingIncomingCall?> getPendingIncomingCall({
     String? callId,
   }) async {
+    final activeSnapshot =
+        VorynActiveCallPresentationService.instance.currentSnapshot;
+    final currentActiveId = activeSnapshot?.callId;
+
     final client = VorynBackend.client;
     if (client != null && client.auth.currentUser != null) {
       try {
@@ -138,8 +144,24 @@ class VorynCallService {
         if (res is List && res.isNotEmpty && res.first is Map) {
           final row = Map<String, dynamic>.from(res.first as Map);
           final rowId = row['id']?.toString() ?? '';
-          if (callId == null || rowId == callId) {
-            return VorynPendingIncomingCall.fromMap(row);
+          if (rowId.isNotEmpty) {
+            if (activeSnapshot != null &&
+                activeSnapshot.isActive &&
+                (currentActiveId == rowId || currentActiveId != null)) {
+              debugPrint(
+                '[CALL_RECOVERY] RPC rowId=$rowId suppressed because active call present ($currentActiveId)',
+              );
+              return null;
+            }
+            if (VorynCallRuntimeCoordinator.isCallActive(rowId)) {
+              debugPrint(
+                '[CALL_RECOVERY] RPC rowId=$rowId suppressed because call is already active in coordinator',
+              );
+              return null;
+            }
+            if (callId == null || rowId == callId) {
+              return VorynPendingIncomingCall.fromMap(row);
+            }
           }
         }
       } catch (e) {
@@ -149,13 +171,21 @@ class VorynCallService {
       }
     }
 
-    // Native SharedPreferences fallback
+    // Native SharedPreferences fallback (strictly RINGING only)
     try {
       final nativePending = await LockScreenService.getPendingIncomingCall();
       if (nativePending != null) {
         final nCallId = nativePending['callId']?.toString();
         final nState = nativePending['state']?.toString();
-        if (nCallId != null && nCallId.isNotEmpty && nState != 'cleared') {
+        if (nCallId != null && nCallId.isNotEmpty && nState == 'RINGING') {
+          if (activeSnapshot != null &&
+              activeSnapshot.isActive &&
+              (currentActiveId == nCallId || currentActiveId != null)) {
+            return null;
+          }
+          if (VorynCallRuntimeCoordinator.isCallActive(nCallId)) {
+            return null;
+          }
           if (callId == null || nCallId == callId) {
             final receivedAt =
                 int.tryParse(nativePending['receivedAt']?.toString() ?? '') ??
@@ -170,7 +200,7 @@ class VorynCallService {
                     nativePending['callerName']?.toString() ?? 'Voryn user',
                 vorynId: '',
                 callType: nativePending['callType']?.toString() ?? 'audio',
-                status: nState == 'accepting' ? 'accepting' : 'ringing',
+                status: 'ringing',
                 createdAt: receivedAt > 0
                     ? DateTime.fromMillisecondsSinceEpoch(receivedAt)
                     : DateTime.now(),

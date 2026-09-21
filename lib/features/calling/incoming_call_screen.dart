@@ -10,6 +10,7 @@ import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
+import 'voryn_active_call_presentation_service.dart';
 import 'voryn_call_history_service.dart';
 import 'voryn_call_latency_tracker.dart';
 import 'voryn_call_runtime_coordinator.dart';
@@ -57,6 +58,25 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
           initials: 'VU',
         );
 
+    final activeSnapshot =
+        VorynActiveCallPresentationService.instance.currentSnapshot;
+    final isCoordinatorActive = VorynCallRuntimeCoordinator.isCallActive(
+      widget.callId,
+    );
+    if ((activeSnapshot != null &&
+            activeSnapshot.isActive &&
+            activeSnapshot.callId == widget.callId) ||
+        isCoordinatorActive) {
+      debugPrint(
+        '[INCOMING_GUARD] callId=${widget.callId} is already active/accepted, suppressing IncomingCallScreen',
+      );
+      _resolved = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _exitSafely();
+      });
+      return;
+    }
+
     _subscribeToCallEvents();
     _verifyAndLoad();
   }
@@ -83,6 +103,19 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   Future<void> _verifyAndLoad() async {
     try {
+      final activeSnapshot =
+          VorynActiveCallPresentationService.instance.currentSnapshot;
+      if ((activeSnapshot != null &&
+              activeSnapshot.isActive &&
+              activeSnapshot.callId == widget.callId) ||
+          VorynCallRuntimeCoordinator.isCallActive(widget.callId)) {
+        debugPrint(
+          '[INCOMING_GUARD] callId=${widget.callId} active in snapshot/coordinator, suppressing incoming verify',
+        );
+        _exitSafely();
+        return;
+      }
+
       if (VorynCallRuntimeCoordinator.isAcceptInFlight(widget.callId)) {
         debugPrint(
           '[CALL ${widget.callId}] accept in flight during incoming verify, ignoring incoming UI',
@@ -234,6 +267,24 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_resolved) {
+      return const Scaffold(backgroundColor: Color(0xFF0D0F12));
+    }
+    final activeSnapshot =
+        VorynActiveCallPresentationService.instance.currentSnapshot;
+    if ((activeSnapshot != null &&
+            activeSnapshot.isActive &&
+            activeSnapshot.callId == widget.callId) ||
+        VorynCallRuntimeCoordinator.isCallActive(widget.callId)) {
+      debugPrint(
+        '[INCOMING_GUARD] IncomingCallScreen build suppressed for active call ${widget.callId}',
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _exitSafely();
+      });
+      return const Scaffold(backgroundColor: Color(0xFF0D0F12));
+    }
+
     debugPrint('[BOOT] IncomingCallScreen build');
     final colors = context.vorynColors;
     final isVideo = _call?.callType == 'video';

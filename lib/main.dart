@@ -403,6 +403,17 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
           );
           return;
         }
+        final activeSnapshot =
+            VorynActiveCallPresentationService.instance.currentSnapshot;
+        if (activeSnapshot != null &&
+            activeSnapshot.isActive &&
+            (activeSnapshot.callId == callId ||
+                activeSnapshot.callId.isNotEmpty)) {
+          debugPrint(
+            '[HOST_OWNERSHIP] suppressed onIncoming in MainActivity: active call ${activeSnapshot.callId} already present',
+          );
+          return;
+        }
         if (await LockScreenService.isCallOwnedByOtherHost(callId)) {
           debugPrint(
             '[HOST_OWNERSHIP] suppressed onIncoming in MainActivity: callId=$callId owned by other host',
@@ -483,6 +494,16 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     final currentUser = VorynBackend.client?.auth.currentUser;
     if (currentUser == null) return;
 
+    final activeSnapshot =
+        VorynActiveCallPresentationService.instance.currentSnapshot;
+    final currentActiveId = activeSnapshot?.callId;
+    if (activeSnapshot != null && activeSnapshot.isActive) {
+      debugPrint(
+        '[INCOMING_RECOVERY] active call present ($currentActiveId), suppressing pending incoming check',
+      );
+      return;
+    }
+
     try {
       final nativeMap = await LockScreenService.getPendingIncomingCall();
       if (nativeMap != null) {
@@ -493,9 +514,10 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
         final now = DateTime.now().millisecondsSinceEpoch;
         final isFresh = nReceivedAt == 0 || (now - nReceivedAt) < 60000;
         if (nCallId.isNotEmpty && isFresh) {
-          if (await LockScreenService.isCallOwnedByOtherHost(nCallId)) {
+          if (nCallId == currentActiveId ||
+              await LockScreenService.isCallOwnedByOtherHost(nCallId)) {
             debugPrint(
-              '[HOST_OWNERSHIP] suppressed pending incoming check in MainActivity: callId=$nCallId owned by other host',
+              '[HOST_OWNERSHIP] suppressed pending incoming check in MainActivity: callId=$nCallId owned by other host or active',
             );
             return;
           }
@@ -505,24 +527,12 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
             );
             return;
           }
-          if (nState == 'RINGING' || nState == 'pending_incoming') {
+          if (nState == 'RINGING') {
             if (!_isCallRouteActive() && mounted) {
               debugPrint(
                 '[RESUME] recovered native pending incoming call: $nCallId',
               );
               _router.go('/incoming-call/$nCallId');
-              return;
-            }
-          } else if (nState == 'accepting') {
-            debugPrint('[RESUME] recovered native accepted call: $nCallId');
-            if (!_isCallRouteActive() && mounted) {
-              final isVideo =
-                  (nativeMap['callType']?.toString() ?? '') == 'video';
-              _router.go(
-                isVideo
-                    ? '/active-video-call/$nCallId'
-                    : '/active-audio-call/$nCallId',
-              );
               return;
             }
           }
@@ -531,9 +541,10 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
 
       final pending = await const VorynCallService().getPendingIncomingCall();
       if (pending != null) {
-        if (await LockScreenService.isCallOwnedByOtherHost(pending.id)) {
+        if (pending.id == currentActiveId ||
+            await LockScreenService.isCallOwnedByOtherHost(pending.id)) {
           debugPrint(
-            '[HOST_OWNERSHIP] suppressed pending incoming check in MainActivity: callId=${pending.id} owned by other host',
+            '[HOST_OWNERSHIP] suppressed pending incoming check in MainActivity: callId=${pending.id} owned by other host or active',
           );
           return;
         }
@@ -541,18 +552,6 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
           debugPrint(
             '[RESUME] accept in-flight for ${pending.id}, suppressing incoming screen',
           );
-          return;
-        }
-        if (pending.status == 'accepting') {
-          debugPrint('[RESUME] recovered pending accepted call: ${pending.id}');
-          if (!_isCallRouteActive() && mounted) {
-            final isVideo = pending.callType == 'video';
-            _router.go(
-              isVideo
-                  ? '/active-video-call/${pending.id}'
-                  : '/active-audio-call/${pending.id}',
-            );
-          }
           return;
         }
         if (pending.status == 'calling' || pending.status == 'ringing') {

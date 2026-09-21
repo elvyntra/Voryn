@@ -139,13 +139,17 @@ class VorynCallPlatformBridge(
                 "isCallOwnedByOtherHost" -> {
                     val callId = call.argument<String>("callId") ?: ""
                     val isOwned = if (activity is MainActivity) {
-                        VorynCallHostManager.isCallOwnedByLockedCall(callId) ||
-                            (VorynCallHostManager.isAnyCallOwnedByLockedCall() && VorynCallHostManager.getActiveCallId() != callId)
+                        VorynCallHostManager.hasActiveOwner(callId) ||
+                            VorynCallHostManager.isCallOwnedByLockedCall(callId) ||
+                            (VorynCallHostManager.isAnyCallOwnedByLockedCall() && VorynCallHostManager.getActiveCallId() != callId) ||
+                            (VorynCallStateManager.getCurrentCallId(activity) == callId &&
+                                (VorynCallStateManager.getCurrentState(activity) == VorynCallStateManager.CallState.ACTIVE ||
+                                 VorynCallStateManager.getCurrentState(activity) == VorynCallStateManager.CallState.ACCEPTING))
                     } else {
                         false
                     }
                     if (isOwned) {
-                        Log.d(TAG, "[HOST_OWNERSHIP] callId=$callId is owned by LOCKED_CALL, suppressing MainActivity action")
+                        Log.d(TAG, "[HOST_OWNERSHIP] callId=$callId is owned by active call, suppressing MainActivity action")
                     }
                     result.success(isOwned)
                 }
@@ -238,7 +242,7 @@ class VorynCallPlatformBridge(
                     if (ok) {
                         IncomingCallRingtoneManager.stop("accept", callId)
                         IncomingCallNotificationManager.cancelIncomingCall(activity, callId, "accept")
-                        VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
+                        VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, VorynCallStateManager.CallState.ACCEPTING)
                         val acceptIntent = Intent(activity, VorynCallActivity::class.java).apply {
                             action = "ACCEPT_CALL"
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -251,6 +255,8 @@ class VorynCallPlatformBridge(
                             putExtra("caller_name", callerName)
                         }
                         activity.startActivity(acceptIntent)
+                    } else {
+                        Log.d(TAG, "[FOREGROUND_ACCEPT] accept ignored (already accepted or invalid) callId=$callId")
                     }
                     result.success(true)
                 }

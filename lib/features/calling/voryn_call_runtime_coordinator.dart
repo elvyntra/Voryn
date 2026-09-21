@@ -43,6 +43,12 @@ class VorynCallRuntimeCoordinator {
     );
   }
 
+  static bool isCallActive(String callId) {
+    final coordinator = _instances[callId];
+    return coordinator?._isConnected == true ||
+        _acceptingCalls.contains(callId);
+  }
+
   static void remove(String callId) {
     _instances.remove(callId);
   }
@@ -66,6 +72,7 @@ class VorynCallRuntimeCoordinator {
   /// the disposing screen from triggering teardown.
   bool isTransitioning = false;
 
+  bool get isConnected => _isConnected;
   bool get isTearingDown => _isTearingDown;
   bool get isEnded => _isEnded;
   bool get routeExitIssued => _routeExitIssued;

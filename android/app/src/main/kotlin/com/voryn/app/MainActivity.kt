@@ -162,13 +162,33 @@ class MainActivity : FlutterActivity() {
         val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         if (!km.isKeyguardLocked) {
             val pending = IncomingCallNotificationManager.getPendingIncomingCall(this)
-            val state = pending?.get("state") as? String
-            val callId = pending?.get("callId") as? String
+            val pendingState = pending?.get("state") as? String
+            val pendingCallId = pending?.get("callId") as? String
             val callerName = pending?.get("callerName") as? String ?: "Voryn User"
             val callType = pending?.get("callType") as? String ?: "audio"
-            if ((state == "RINGING" || state == "pending_incoming") && !callId.isNullOrBlank()) {
-                Log.d("VorynCall", "[INCOMING_HANDOFF] handing off pending callId=$callId to foreground Flutter")
-                VorynCallPlatformBridge.notifyIncomingCall(callId, callerName, callType)
+
+            val owner = VorynCallHostManager.getActiveHost()
+            val hasActiveOwner = !pendingCallId.isNullOrBlank() && VorynCallHostManager.hasActiveOwner(pendingCallId)
+
+            if (pendingCallId.isNullOrBlank() || pendingState != "RINGING") {
+                if (!pendingCallId.isNullOrBlank()) {
+                    Log.d(
+                        "VorynCall",
+                        "[INCOMING_RECOVERY] callId=$pendingCallId pendingState=$pendingState activeCallId=$activeCallId owner=$owner decision=suppress reason=not_ringing"
+                    )
+                }
+            } else if (hasActiveOwner || pendingCallId == activeCallId || callState == VorynCallStateManager.CallState.ACTIVE || callState == VorynCallStateManager.CallState.ACCEPTING) {
+                Log.d(
+                    "VorynCall",
+                    "[INCOMING_RECOVERY] callId=$pendingCallId pendingState=$pendingState activeCallId=$activeCallId owner=$owner decision=suppress reason=already_active"
+                )
+            } else {
+                Log.d(
+                    "VorynCall",
+                    "[INCOMING_RECOVERY] callId=$pendingCallId pendingState=$pendingState activeCallId=$activeCallId owner=$owner decision=show reason=valid_ringing"
+                )
+                Log.d("VorynCall", "[INCOMING_HANDOFF] handing off pending callId=$pendingCallId to foreground Flutter")
+                VorynCallPlatformBridge.notifyIncomingCall(pendingCallId, callerName, callType)
             }
         }
     }

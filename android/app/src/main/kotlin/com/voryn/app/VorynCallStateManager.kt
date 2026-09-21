@@ -94,10 +94,11 @@ object VorynCallStateManager {
         val current = getCurrentState(context)
         val activeId = getCurrentCallId(context)
         if (activeId == callId && (current == CallState.ACCEPTING || current == CallState.ACTIVE || current == CallState.ENDING || current == CallState.TERMINAL)) {
-            Log.d(TAG, "[CALL_STATE] duplicate accept ignored callId=$callId state=$current")
+            Log.d(TAG, "[CALL_ACCEPT] callId=$callId oldState=$current result=ignored_already_accepted")
             return false
         }
 
+        val oldState = current
         inMemoryState = CallState.ACCEPTING
         inMemoryCallId = callId
 
@@ -107,6 +108,8 @@ object VorynCallStateManager {
             .putString(KEY_CALL_STATE, CallState.ACCEPTING.name)
             .apply()
 
+        VorynCallHostManager.updateState(callId, CallState.ACCEPTING)
+        Log.d(TAG, "[CALL_ACCEPT] callId=$callId oldState=$oldState newState=ACCEPTING result=accepted")
         Log.d(TAG, "[CALL_STATE] ACCEPTING callId=$callId")
         return true
     }
@@ -134,6 +137,7 @@ object VorynCallStateManager {
             .putLong(KEY_STARTED_AT, System.currentTimeMillis())
             .apply()
 
+        VorynCallHostManager.updateState(callId, CallState.ACTIVE)
         Log.d(TAG, "[CALL_STATE] ACTIVE callId=$callId")
     }
 
@@ -144,7 +148,7 @@ object VorynCallStateManager {
         prefs.edit()
             .putString(KEY_PRESENTATION_STATE, presentation.name)
             .apply()
-        Log.d(TAG, "[CALL_STATE] presentation=$presentation callId=$callId")
+        Log.d(TAG, "[CALL_PRESENTATION] $presentation callId=$callId")
     }
 
     @Synchronized
@@ -166,9 +170,8 @@ object VorynCallStateManager {
         if (state != CallState.ACTIVE && state != CallState.ACCEPTING) {
             return null
         }
-
+        val callId = getCurrentCallId(context) ?: return null
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val callId = prefs.getString(KEY_CALL_ID, null) ?: inMemoryCallId ?: return null
         val presentation = getPresentationState(context)
         return mapOf(
             "callId" to callId,
@@ -187,8 +190,10 @@ object VorynCallStateManager {
         if (newState == CallState.TERMINAL || newState == CallState.NONE) {
             inMemoryCallId = null
             inMemoryPresentation = PresentationState.FULLSCREEN
+            VorynCallHostManager.releaseCall(callId, VorynCallHostManager.getActiveHost())
         } else {
             inMemoryCallId = callId
+            VorynCallHostManager.updateState(callId, newState)
         }
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -214,11 +219,17 @@ object VorynCallStateManager {
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        val receivedAt = prefs.getLong(KEY_RECEIVED_AT, 0L)
+        val now = System.currentTimeMillis()
+        if (receivedAt > 0L && (now - receivedAt) > 60000L) {
+            return null
+        }
+
         return mapOf(
             "callId" to callId,
             "callType" to (prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"),
             "callerName" to (prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"),
-            "receivedAt" to prefs.getLong(KEY_RECEIVED_AT, 0L),
+            "receivedAt" to receivedAt,
             "state" to CallState.RINGING.name
         )
     }

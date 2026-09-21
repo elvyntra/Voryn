@@ -13,8 +13,15 @@ object VorynCallHostManager {
     @Volatile
     private var activeHost: HostType = HostType.NONE
 
+    @Volatile
+    private var callState: VorynCallStateManager.CallState = VorynCallStateManager.CallState.NONE
+
     @Synchronized
-    fun claimCall(callId: String, host: HostType): Boolean {
+    fun claimCall(
+        callId: String,
+        host: HostType,
+        state: VorynCallStateManager.CallState = VorynCallStateManager.CallState.ACCEPTING
+    ): Boolean {
         if (callId.isBlank()) return false
         if (activeCallId != null && activeCallId != callId && activeHost != HostType.NONE) {
             Log.w(
@@ -25,9 +32,18 @@ object VorynCallHostManager {
         }
         activeCallId = callId
         activeHost = host
-        Log.d(TAG, "[CALL_HOST] owner=$host callId=$callId")
+        callState = state
+        Log.d(TAG, "[CALL_HOST] callId=$callId owner=$host state=$state")
         Log.d(TAG, "[HOST_OWNERSHIP] native host ownership = $host callId=$callId")
         return true
+    }
+
+    @Synchronized
+    fun updateState(callId: String, newState: VorynCallStateManager.CallState) {
+        if (activeCallId == callId) {
+            callState = newState
+            Log.d(TAG, "[CALL_HOST] callId=$callId owner=$activeHost state=$newState")
+        }
     }
 
     @Synchronized
@@ -36,7 +52,15 @@ object VorynCallHostManager {
             Log.d(TAG, "[HOST_OWNERSHIP] released callId=$callId host=$host")
             activeCallId = null
             activeHost = HostType.NONE
+            callState = VorynCallStateManager.CallState.NONE
         }
+    }
+
+    @Synchronized
+    fun hasActiveOwner(callId: String): Boolean {
+        return (activeCallId == callId) &&
+            (activeHost == HostType.LOCKED_CALL || activeHost == HostType.MAIN) &&
+            (callState == VorynCallStateManager.CallState.ACTIVE || callState == VorynCallStateManager.CallState.ACCEPTING)
     }
 
     @Synchronized
@@ -54,4 +78,7 @@ object VorynCallHostManager {
 
     @Synchronized
     fun getActiveHost(): HostType = activeHost
+
+    @Synchronized
+    fun getState(): VorynCallStateManager.CallState = callState
 }

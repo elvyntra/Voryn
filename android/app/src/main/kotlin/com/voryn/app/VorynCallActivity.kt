@@ -62,7 +62,9 @@ class VorynCallActivity : FlutterActivity() {
         currentCallId = callId.ifBlank { null }
 
         if (callId.isNotBlank()) {
-            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL)
+            val cur = VorynCallStateManager.getCurrentState(this)
+            val st = if (cur == VorynCallStateManager.CallState.ACTIVE) cur else VorynCallStateManager.CallState.ACCEPTING
+            VorynCallHostManager.claimCall(callId, VorynCallHostManager.HostType.LOCKED_CALL, st)
         }
 
         val acceptTimestamp = intent?.getLongExtra("accept_timestamp", 0L) ?: 0L
