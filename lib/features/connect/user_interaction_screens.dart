@@ -12,6 +12,7 @@ import 'mock_voryn_state.dart';
 import '../calling/voryn_call_service.dart';
 import '../contacts/voryn_contact_service.dart';
 import '../messages/voryn_call_message_service.dart';
+import '../messages/voryn_message_repository.dart';
 
 class UserPreviewScreen extends StatefulWidget {
   const UserPreviewScreen({super.key, required this.user});
@@ -535,10 +536,58 @@ class _QuickMessageSheetState extends State<QuickMessageSheet> {
               isLoading: _sending,
               onPressed: canSend && !_sending ? _send : null,
             ),
+            if ((widget.user.backendUid != null &&
+                    widget.user.backendUid!.isNotEmpty) ||
+                widget.user.id.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  onPressed: _openFullConversation,
+                  icon: const Icon(Icons.forum_outlined, size: 18),
+                  label: const Text('View full conversation'),
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _openFullConversation() async {
+    Navigator.pop(context);
+    var uid = widget.user.backendUid;
+    if (uid == null || uid.isEmpty) {
+      try {
+        final client = VorynBackend.client;
+        final res = await client
+            ?.from('profiles')
+            .select('uid')
+            .eq(
+              'voryn_id',
+              widget.user.id.replaceAll('@', '').trim().toLowerCase(),
+            )
+            .maybeSingle();
+        uid = res?['uid'] as String?;
+      } catch (_) {}
+    }
+
+    if (uid != null && uid.isNotEmpty) {
+      try {
+        final threadId = await VorynMessageRepository.instance
+            .getOrCreateDirectThread(uid);
+        if (mounted) {
+          context.push(
+            '/messages/thread/$threadId',
+            extra: {
+              'otherUserUid': uid,
+              'otherUserName': widget.user.name,
+              'otherUserVorynId': widget.user.id,
+            },
+          );
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> _send() async {

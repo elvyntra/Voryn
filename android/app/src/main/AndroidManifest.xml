@@ -42,6 +42,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="io.supabase.voryn" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="voryn" android:host="messages" />
+            </intent-filter>
         </activity>
         <activity
             android:name=".IncomingCallActivity"
@@ -78,6 +84,14 @@
                 <action android:name="com.voryn.app.ACTION_DECLINE_CALL" />
                 <action android:name="com.voryn.app.ACTION_END_ACTIVE_CALL" />
                 <action android:name="decline" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".VorynMessageReplyReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.voryn.app.ACTION_REPLY_MESSAGE" />
+                <action android:name="com.voryn.app.ACTION_MARK_READ" />
             </intent-filter>
         </receiver>
         <service

@@ -30,6 +30,10 @@ import 'features/recents/recents_live_screen.dart';
 import 'features/meetings/meetings_screen.dart';
 import 'features/onboarding/onboarding_screens.dart';
 import 'features/onboarding/landing_screen.dart';
+import 'features/messages/call_messages_screen.dart';
+import 'features/messages/conversation_screen.dart';
+import 'features/messages/voryn_background_auth_bridge.dart';
+import 'features/messages/voryn_message_repository.dart';
 import 'shared/widgets/voryn_avatar.dart';
 import 'shared/widgets/voryn_card.dart';
 import 'shared/widgets/voryn_presence.dart';
@@ -374,6 +378,27 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     VorynPresenceService.onLifecycleChanged(AppLifecycleState.resumed);
+    VorynBackgroundAuthBridge.instance.initialize();
+    VorynBackgroundAuthBridge.instance.onOpenThread.listen((threadId) {
+      if (mounted && !_isCallRouteActive()) {
+        _router.go('/messages/thread/$threadId');
+      }
+    });
+    VorynBackgroundAuthBridge.instance.onOpenInbox.listen((_) {
+      if (mounted && !_isCallRouteActive()) {
+        _router.go('/messages');
+      }
+    });
+
+    final initialSession = VorynBackend.client?.auth.currentSession;
+    if (initialSession != null) {
+      VorynBackgroundAuthBridge.instance.syncSession(initialSession);
+      VorynMessageRepository.instance.initializeRealtime();
+      unawaited(
+        VorynMessageRepository.instance.reconcile(reason: 'cold_start'),
+      );
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!_firstFrameReported) {
         _firstFrameReported = true;
@@ -383,6 +408,14 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
       await VorynFirebaseMessaging.initialize();
       if (!mounted) return;
       await _handlePendingCallLaunch();
+      final pendingThread = await VorynBackgroundAuthBridge.instance
+          .getPendingMessageThread();
+      if (pendingThread != null &&
+          pendingThread.isNotEmpty &&
+          mounted &&
+          !_isCallRouteActive()) {
+        _router.go('/messages/thread/$pendingThread');
+      }
       unawaited(initializeVorynContactState());
     });
 
@@ -454,6 +487,13 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
         } else if (state.event == AuthChangeEvent.signedIn) {
           VorynPresenceService.setOnline();
           VorynFirebaseMessaging.registerTokenAfterSplash();
+          if (state.session != null) {
+            VorynBackgroundAuthBridge.instance.syncSession(state.session!);
+            VorynMessageRepository.instance.initializeRealtime();
+            unawaited(
+              VorynMessageRepository.instance.reconcile(reason: 'signed_in'),
+            );
+          }
           if (!_isCallRouteActive() &&
               widget.initialLaunchConfig?.mode == AppLaunchMode.normal) {
             final isLocked = await LockScreenService.isKeyguardLocked();
@@ -469,6 +509,9 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
           }
         } else if (state.event == AuthChangeEvent.signedOut) {
           VorynPresenceService.setOffline();
+          VorynBackgroundAuthBridge.instance.clearSession();
+          VorynMessageRepository.instance.disposeRealtime();
+          VorynMessageRepository.instance.totalUnreadCount.value = 0;
         }
       });
     }
@@ -481,6 +524,9 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _checkPendingIncomingCall();
       VorynActiveCallPresentationService.instance.refreshSnapshot();
+      unawaited(
+        VorynMessageRepository.instance.reconcile(reason: 'app_resume'),
+      );
     }
   }
 
@@ -865,6 +911,26 @@ GoRouter _buildRouter({String? initialLocation}) {
       GoRoute(
         path: '/onboarding/voryn-id',
         builder: (context, state) => const CreateVorynIdScreen(),
+      ),
+      GoRoute(
+        parentNavigatorKey: rootNavigatorKey,
+        path: '/messages',
+        builder: (context, state) => const CallMessagesScreen(),
+      ),
+      GoRoute(
+        parentNavigatorKey: rootNavigatorKey,
+        path: '/messages/thread/:threadId',
+        builder: (context, state) {
+          final threadId = state.pathParameters['threadId'] ?? '';
+          final extra = state.extra as Map<String, dynamic>?;
+          return ConversationScreen(
+            threadId: threadId,
+            otherUserUid: extra?['otherUserUid'] as String?,
+            otherUserName: extra?['otherUserName'] as String?,
+            otherUserVorynId: extra?['otherUserVorynId'] as String?,
+            otherUserAvatarUrl: extra?['otherUserAvatarUrl'] as String?,
+          );
+        },
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {

@@ -28,4 +28,7 @@ class VorynBackend {
   }
 
   static bool get isConfigured => client != null;
+
+  static String get supabaseUrl => VorynSupabaseConfig.fromEnvironment().url;
+  static String get anonKey => VorynSupabaseConfig.fromEnvironment().anonKey;
 }

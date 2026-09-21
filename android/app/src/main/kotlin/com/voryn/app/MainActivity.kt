@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -37,6 +39,31 @@ class MainActivity : FlutterActivity() {
 
         fun notifyCallTerminal(callId: String, type: String) {
             VorynCallPlatformBridge.notifyCallTerminal(callId, type)
+        }
+
+        var messagesChannel: MethodChannel? = null
+            private set
+        var pendingThreadId: String? = null
+            private set
+
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        fun notifyIncomingMessage(threadId: String, messageId: String, senderUid: String, body: String) {
+            mainHandler.post {
+                try {
+                    messagesChannel?.invokeMethod(
+                        "onIncomingMessage",
+                        mapOf(
+                            "threadId" to threadId,
+                            "messageId" to messageId,
+                            "senderUid" to senderUid,
+                            "body" to body
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.e("VorynMsg", "[MESSAGE_FCM] notifyIncomingMessage error: ${e.message}")
+                }
+            }
         }
 
         fun showMainAppDuringCall(context: Context) {
@@ -93,6 +120,40 @@ class MainActivity : FlutterActivity() {
         )
         bridge = bridgeInstance
         VorynProximityController.probe(this)
+
+        val msgChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.voryn.app/messages")
+        msgChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "syncBackgroundAuth" -> {
+                    val uid = call.argument<String>("userUid") ?: ""
+                    val access = call.argument<String>("accessToken") ?: ""
+                    val refresh = call.argument<String>("refreshToken") ?: ""
+                    val expiresAt = call.argument<Number>("expiresAtMs")?.toLong() ?: 0L
+                    val url = call.argument<String>("supabaseUrl") ?: ""
+                    val key = call.argument<String>("anonKey") ?: ""
+                    VorynBackgroundAuthStore.saveSession(this, uid, access, refresh, expiresAt, url, key)
+                    result.success(true)
+                }
+                "clearBackgroundAuth" -> {
+                    VorynBackgroundAuthStore.clear(this)
+                    result.success(true)
+                }
+                "getPendingMessageThread" -> {
+                    val thread = pendingThreadId
+                    pendingThreadId = null
+                    result.success(thread)
+                }
+                "dismissMessageNotification" -> {
+                    val threadId = call.argument<String>("threadId") ?: ""
+                    if (threadId.isNotBlank()) {
+                        VorynMessageNotificationManager.dismissThreadNotification(this, threadId)
+                    }
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        messagesChannel = msgChannel
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,10 +186,13 @@ class MainActivity : FlutterActivity() {
 
         applyShowWhenLocked(false)
         IncomingCallNotificationManager.ensureChannel(this)
+        VorynMessageNotificationManager.createNotificationChannel(this)
+        checkMessageDeepLink(intent)
     }
 
     override fun onResume() {
         super.onResume()
+        Log.d("VorynMsg", "[MAIN_ACTIVITY] onResume")
         isAppInForeground = true
         if (!hasActiveCallPresentation) {
             applyShowWhenLocked(false)
@@ -195,13 +259,20 @@ class MainActivity : FlutterActivity() {
 
     override fun onPause() {
         super.onPause()
+        Log.d("VorynMsg", "[MAIN_ACTIVITY] onPause")
         isAppInForeground = false
         if (!hasActiveCallPresentation) {
             applyShowWhenLocked(false)
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        Log.d("VorynMsg", "[MAIN_ACTIVITY] onStop")
+    }
+
     override fun onDestroy() {
+        Log.d("VorynMsg", "[MAIN_ACTIVITY] onDestroy")
         hasActiveCallPresentation = false
         applyShowWhenLocked(false)
         VorynProximityController.releaseAll("app_destroy")
@@ -245,6 +316,28 @@ class MainActivity : FlutterActivity() {
         if (launchData != null) {
             bridge?.methodChannel?.invokeMethod("onCallLaunchIntent", launchData)
         }
+        checkMessageDeepLink(intent)
+    }
+
+    private fun checkMessageDeepLink(intent: Intent?) {
+        val dataUri = intent?.data ?: return
+        if (dataUri.scheme == "voryn" && dataUri.host == "messages") {
+            val pathSegments = dataUri.pathSegments
+            val threadId = if (pathSegments.isNotEmpty()) pathSegments.last() else null
+            Log.d("VorynMsg", "[MESSAGE_NAV] source=intent action=${intent.action} threadId=$threadId")
+            if (!threadId.isNullOrBlank() && threadId != "inbox") {
+                Log.d("VorynMsg", "[DEEP_LINK] message thread deep link: $threadId")
+                pendingThreadId = threadId
+                mainHandler.post {
+                    messagesChannel?.invokeMethod("onOpenThread", mapOf("threadId" to threadId))
+                }
+            } else {
+                Log.d("VorynMsg", "[DEEP_LINK] message inbox deep link")
+                mainHandler.post {
+                    messagesChannel?.invokeMethod("onOpenInbox", emptyMap<String, Any>())
+                }
+            }
+        }
     }
 
     private fun extractCallLaunchData(intent: Intent?): Map<String, String>? {
@@ -256,11 +349,15 @@ class MainActivity : FlutterActivity() {
             ?: intent.getStringExtra("callId")
             ?: ""
 
+        if (intent.data?.host == "messages") {
+            return null
+        }
+
         if (payload.isBlank()) {
             val dataUri = intent.data
             if (dataUri != null) {
                 val lastSeg = dataUri.lastPathSegment
-                if (!lastSeg.isNullOrBlank() && (dataUri.toString().contains("call") || dataUri.scheme == "voryn")) {
+                if (!lastSeg.isNullOrBlank() && (dataUri.toString().contains("call") || (dataUri.scheme == "voryn" && dataUri.host != "messages"))) {
                     payload = lastSeg
                 }
             }

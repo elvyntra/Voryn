@@ -92,6 +92,38 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
 
                 MainActivity.notifyCallTerminal(callId, type)
             }
+            "call_message" -> {
+                val messageId = data["message_id"] ?: data["id"] ?: ""
+                val threadId = data["thread_id"] ?: ""
+                val senderUid = data["sender_uid"] ?: ""
+                val senderName = data["sender_name"] ?: "Voryn User"
+                val body = data["body"] ?: ""
+                val remindToCall = data["remind_to_call"] == "true"
+                val timestamp = System.currentTimeMillis()
+
+                val appState = if (MainActivity.isAppInForeground) "FOREGROUND" else "BACKGROUND_OR_CLOSED"
+                Log.d("VorynMsg", "[MESSAGE_FCM] phase=enter type=call_message messageId=$messageId threadId=$threadId appState=$appState")
+
+                if (threadId.isNotBlank() && body.isNotBlank()) {
+                    Log.d("VorynMsg", "[MESSAGE_FCM] phase=before_notification")
+                    VorynMessageNotificationManager.showMessageNotification(
+                        this,
+                        messageId,
+                        threadId,
+                        senderUid,
+                        senderName,
+                        body,
+                        remindToCall,
+                        timestamp
+                    )
+                    Log.d("VorynMsg", "[MESSAGE_FCM] phase=after_notification")
+
+                    Log.d("VorynMsg", "[MESSAGE_FCM] phase=before_delegate")
+                    MainActivity.notifyIncomingMessage(threadId, messageId, senderUid, body)
+                    Log.d("VorynMsg", "[MESSAGE_FCM] phase=complete")
+                }
+                return
+            }
             else -> {
                 super.onMessageReceived(remoteMessage)
             }

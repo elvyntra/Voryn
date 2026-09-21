@@ -58,3 +58,4 @@ app.*.map.json
 # Supabase temp
 supabase/.temp/
 .temp/
+*.pdf

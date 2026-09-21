@@ -1,6 +1,10 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
+import 'voryn_message_repository.dart';
 
 class VorynCallMessage {
   const VorynCallMessage({
@@ -86,19 +90,38 @@ class VorynCallMessageService {
         error: 'Messages must be between 1 and 120 characters.',
       );
     }
+
+    debugPrint(
+      '[MESSAGE_SEND] action=quick_send_start candidate=$recipientVorynId remind=$remindToCall',
+    );
+
     try {
-      await client.rpc(
-        'send_call_message',
-        params: {
-          'candidate': recipientVorynId,
-          'message_body': message,
-          'remind': remindToCall,
-        },
+      final messageId =
+          await client.rpc(
+                'send_call_message',
+                params: {
+                  'candidate': recipientVorynId,
+                  'message_body': message,
+                  'remind': remindToCall,
+                },
+              )
+              as String?;
+
+      debugPrint(
+        '[MESSAGE_SEND] action=quick_send_success messageId=$messageId candidate=$recipientVorynId',
       );
+
+      if (messageId != null) {
+        VorynMessageRepository.instance.notifyThreadsChanged();
+      }
       return const VorynCallMessageResult();
-    } on PostgrestException catch (error) {
+    } on PostgrestException catch (error, st) {
+      debugPrint(
+        '[MESSAGE_SEND] action=quick_send_error postgrestError=${error.message}\n$st',
+      );
       return VorynCallMessageResult(error: error.message);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[MESSAGE_SEND] action=quick_send_error error=$e\n$st');
       return const VorynCallMessageResult(
         error: 'Could not send this message. Please try again.',
       );
