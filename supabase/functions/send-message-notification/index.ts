@@ -70,39 +70,55 @@ Deno.serve(async (request) => {
       throw new Error('Firebase service account is not configured.');
     }
 
-    const { messageId } = await request.json();
-    if (typeof messageId !== 'string' || !/^[0-9a-f-]{36}$/i.test(messageId)) {
-      return Response.json({ error: 'Invalid messageId.' }, {
+    const bodyJson = await request.json().catch(() => ({}));
+    let outboxId = bodyJson.outboxId;
+
+    const admin = createClient(supabaseUrl, secretKey);
+
+    // Backward compatibility: if messageId passed instead of outboxId, find latest pending row
+    if (!outboxId && bodyJson.messageId) {
+      const { data: fallbackRow } = await admin
+        .from('message_push_outbox')
+        .select('id')
+        .eq('message_id', bodyJson.messageId)
+        .in('status', ['pending', 'retry'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackRow) {
+        outboxId = fallbackRow.id;
+      }
+    }
+
+    if (typeof outboxId !== 'string' || !/^[0-9a-f-]{36}$/i.test(outboxId)) {
+      return Response.json({ error: 'Invalid outboxId.' }, {
         status: 400,
         headers: corsHeaders,
       });
     }
 
-    const admin = createClient(supabaseUrl, secretKey);
-
-    // 1. Atomic claim of the push row
+    // 1. Atomic claim of the push event
     const { data: claimed, error: claimError } = await admin.rpc(
-      'claim_message_push',
-      { p_message_id: messageId }
+      'claim_message_push_event',
+      { p_outbox_id: outboxId }
     );
 
     if (claimError) {
       console.error(
-        `[MESSAGE_PUSH_SERVER] messageId=${messageId} claim_error=${claimError.message}`
+        `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} claim_error=${claimError.message}`
       );
     }
 
     if (claimed === false) {
-      // Check current status in outbox
       const { data: outboxRow } = await admin
         .from('message_push_outbox')
         .select('status, attempt_count')
-        .eq('message_id', messageId)
+        .eq('id', outboxId)
         .maybeSingle();
 
       const currentStatus = outboxRow?.status ?? 'unknown';
       console.log(
-        `[MESSAGE_PUSH_SERVER] messageId=${messageId} claim=rejected status=${currentStatus}`
+        `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} claim=rejected status=${currentStatus}`
       );
 
       if (currentStatus === 'sent') {
@@ -117,20 +133,37 @@ Deno.serve(async (request) => {
       );
     }
 
-    console.log(
-      `[MESSAGE_PUSH_SERVER] messageId=${messageId} claim=acquired`
-    );
+    console.log(`[MESSAGE_PUSH_SERVER] outboxId=${outboxId} claim=acquired`);
 
-    // 2. Load canonical message
+    // 2. Load outbox event row
+    const { data: outboxRow, error: outboxError } = await admin
+      .from('message_push_outbox')
+      .select('id, message_id, event_type, message_version, recipient_uid')
+      .eq('id', outboxId)
+      .maybeSingle();
+
+    if (outboxError || !outboxRow) {
+      await admin.rpc('update_message_push_result', {
+        p_outbox_id: outboxId,
+        p_status: 'failed_terminal',
+        p_error: 'Outbox row not found',
+      });
+      return Response.json({ error: 'Outbox row not found.' }, {
+        status: 404,
+        headers: corsHeaders,
+      });
+    }
+
+    // 3. Load canonical message
     const { data: message, error: messageError } = await admin
       .from('call_messages')
-      .select('id, thread_id, sender_uid, recipient_uid, body, remind_to_call, created_at')
-      .eq('id', messageId)
+      .select('id, thread_id, sender_uid, recipient_uid, body, remind_to_call, created_at, edited_at, deleted_at, message_version')
+      .eq('id', outboxRow.message_id)
       .maybeSingle();
 
     if (messageError || !message) {
       await admin.rpc('update_message_push_result', {
-        p_message_id: messageId,
+        p_outbox_id: outboxId,
         p_status: 'failed_terminal',
         p_error: 'Canonical message not found',
       });
@@ -140,7 +173,68 @@ Deno.serve(async (request) => {
       });
     }
 
-    // 3. Load sender profile
+    // 4. Canonical state reconciliation
+    let payloadType = 'call_message';
+    let pushVersion = String(outboxRow.message_version || 1);
+    let pushBody = '';
+
+    if (outboxRow.event_type === 'created') {
+      if (message.deleted_at) {
+        console.log(
+          `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} messageId=${message.id} obsolete_created_deleted`
+        );
+        await admin.rpc('update_message_push_result', {
+          p_outbox_id: outboxId,
+          p_status: 'sent',
+          p_error: 'obsolete_created_deleted',
+        });
+        return Response.json(
+          { status: 'obsolete_created_deleted' },
+          { headers: corsHeaders }
+        );
+      }
+      payloadType = 'call_message';
+      pushVersion = String(message.message_version);
+      pushBody = message.body ?? '';
+    } else if (outboxRow.event_type === 'edited') {
+      if (message.deleted_at) {
+        console.log(
+          `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} messageId=${message.id} obsolete_edit_deleted`
+        );
+        await admin.rpc('update_message_push_result', {
+          p_outbox_id: outboxId,
+          p_status: 'sent',
+          p_error: 'obsolete_edit_deleted',
+        });
+        return Response.json(
+          { status: 'obsolete_edit_deleted' },
+          { headers: corsHeaders }
+        );
+      }
+      if (Number(outboxRow.message_version) < Number(message.message_version)) {
+        console.log(
+          `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} messageId=${message.id} stale_edit_superseded outboxVer=${outboxRow.message_version} canonicalVer=${message.message_version}`
+        );
+        await admin.rpc('update_message_push_result', {
+          p_outbox_id: outboxId,
+          p_status: 'sent',
+          p_error: 'stale_edit_superseded',
+        });
+        return Response.json(
+          { status: 'stale_edit_superseded' },
+          { headers: corsHeaders }
+        );
+      }
+      payloadType = 'call_message_edited';
+      pushVersion = String(message.message_version);
+      pushBody = message.body ?? '';
+    } else if (outboxRow.event_type === 'deleted') {
+      payloadType = 'call_message_deleted';
+      pushVersion = String(message.message_version);
+      pushBody = ''; // Never send deleted body
+    }
+
+    // 5. Load sender profile
     const { data: senderProfile } = await admin
       .from('profiles')
       .select('full_name, voryn_id')
@@ -153,11 +247,12 @@ Deno.serve(async (request) => {
       'Voryn User';
     const senderVorynId = senderProfile?.voryn_id || '';
 
-    // 4. Load recipient devices
+    // 6. Load recipient devices
+    const targetRecipient = outboxRow.recipient_uid || message.recipient_uid;
     const { data: devices } = await admin
       .from('user_devices')
       .select('push_token, platform, installation_id')
-      .eq('user_uid', message.recipient_uid)
+      .eq('user_uid', targetRecipient)
       .not('push_token', 'is', null);
 
     const tokens = [
@@ -165,12 +260,12 @@ Deno.serve(async (request) => {
     ] as string[];
 
     console.log(
-      `[MESSAGE_PUSH_SERVER] messageId=${messageId} recipientUid=${message.recipient_uid} devicesFound=${tokens.length}`
+      `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} messageId=${message.id} eventType=${outboxRow.event_type} recipientUid=${targetRecipient} devicesFound=${tokens.length}`
     );
 
     if (tokens.length === 0) {
       await admin.rpc('update_message_push_result', {
-        p_message_id: messageId,
+        p_outbox_id: outboxId,
         p_status: 'sent',
         p_error: 'no_devices',
       });
@@ -180,7 +275,7 @@ Deno.serve(async (request) => {
       );
     }
 
-    // 5. Authorize Firebase and dispatch FCM
+    // 7. Authorize Firebase and dispatch FCM
     const credentials = JSON.parse(serviceAccountJson) as FirebaseServiceAccount;
     const googleAuth = new GoogleAuth({
       credentials,
@@ -198,15 +293,18 @@ Deno.serve(async (request) => {
         message: {
           token,
           data: {
-            type: 'call_message',
-            message_id: message.id,
-            thread_id: message.thread_id,
-            sender_uid: message.sender_uid,
+            type: payloadType,
+            message_id: String(message.id),
+            thread_id: String(message.thread_id),
+            sender_uid: String(message.sender_uid),
             sender_name: senderName,
             sender_voryn_id: senderVorynId,
-            body: message.body,
+            body: pushBody,
             remind_to_call: message.remind_to_call ? 'true' : 'false',
-            created_at: message.created_at,
+            message_version: pushVersion,
+            created_at: String(message.created_at ?? ''),
+            edited_at: String(message.edited_at ?? ''),
+            deleted_at: String(message.deleted_at ?? ''),
           },
           android: {
             priority: 'high',
@@ -235,17 +333,16 @@ Deno.serve(async (request) => {
         if (res.ok) {
           deliveredCount++;
           console.log(
-            `[MESSAGE_PUSH_SERVER] messageId=${messageId} tokenPrefix=${token.slice(0, 8)} send_success fcmId=${resJson?.name}`
+            `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} type=${payloadType} tokenPrefix=${token.slice(0, 8)} send_success fcmId=${resJson?.name}`
           );
         } else {
           const status = res.status;
           const errorCode = resJson?.error?.details?.[0]?.errorCode || resJson?.error?.status || '';
           lastError = `FCM status=${status} code=${errorCode}`;
           console.error(
-            `[MESSAGE_PUSH_SERVER] messageId=${messageId} tokenPrefix=${token.slice(0, 8)} send_failure status=${status} error=${JSON.stringify(resJson)}`
+            `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} tokenPrefix=${token.slice(0, 8)} send_failure status=${status} error=${JSON.stringify(resJson)}`
           );
 
-          // Prune dead/unregistered tokens
           if (
             status === 404 ||
             errorCode === 'UNREGISTERED' ||
@@ -264,21 +361,21 @@ Deno.serve(async (request) => {
       } catch (err) {
         lastError = String(err);
         console.error(
-          `[MESSAGE_PUSH_SERVER] messageId=${messageId} fetch_exception:`,
+          `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} fetch_exception:`,
           err
         );
       }
     }
 
-    // 6. Update outbox status based on delivery outcome
+    // 8. Update outbox status based on delivery outcome
     if (deliveredCount > 0) {
       await admin.rpc('update_message_push_result', {
-        p_message_id: messageId,
+        p_outbox_id: outboxId,
         p_status: 'sent',
         p_error: null,
       });
       console.log(
-        `[MESSAGE_PUSH_SERVER] messageId=${messageId} result=sent delivered=${deliveredCount}`
+        `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} result=sent delivered=${deliveredCount}`
       );
       return Response.json(
         { delivered: deliveredCount, status: 'sent' },
@@ -286,12 +383,12 @@ Deno.serve(async (request) => {
       );
     } else {
       await admin.rpc('update_message_push_result', {
-        p_message_id: messageId,
+        p_outbox_id: outboxId,
         p_status: 'retry',
         p_error: lastError ?? 'FCM delivery failed for all devices',
       });
       console.log(
-        `[MESSAGE_PUSH_SERVER] messageId=${messageId} result=retry error=${lastError}`
+        `[MESSAGE_PUSH_SERVER] outboxId=${outboxId} result=retry error=${lastError}`
       );
       return Response.json(
         { delivered: 0, status: 'retry', error: lastError },

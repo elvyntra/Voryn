@@ -92,6 +92,7 @@
             <intent-filter>
                 <action android:name="com.voryn.app.ACTION_REPLY_MESSAGE" />
                 <action android:name="com.voryn.app.ACTION_MARK_READ" />
+                <action android:name="com.voryn.app.ACTION_NOTIFICATION_DISMISSED" />
             </intent-filter>
         </receiver>
         <service

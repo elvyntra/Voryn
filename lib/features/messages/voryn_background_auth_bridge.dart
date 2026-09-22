@@ -113,4 +113,17 @@ class VorynBackgroundAuthBridge {
       });
     } catch (_) {}
   }
+
+  Future<void> removeMessageFromNotification(
+    String threadId,
+    String messageId,
+  ) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod('removeMessageFromNotification', {
+        'threadId': threadId,
+        'messageId': messageId,
+      });
+    } catch (_) {}
+  }
 }

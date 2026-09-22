@@ -81,6 +81,10 @@ class VorynMessageReplyReceiver : BroadcastReceiver() {
 
                 WorkManager.getInstance(context).enqueue(workRequest)
             }
+            VorynMessageNotificationManager.ACTION_NOTIFICATION_DISMISSED -> {
+                Log.d(TAG, "[REPLY_RCV] notification dismissed by swipe threadId=$threadId")
+                VorynMessageNotificationManager.clearThreadHistory(context, threadId)
+            }
         }
     }
 }

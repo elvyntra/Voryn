@@ -15,11 +15,26 @@ class VorynMessageRepository {
   final _messageStreamController = StreamController<VorynMessage>.broadcast();
   Stream<VorynMessage> get onMessageReceived => _messageStreamController.stream;
 
+  final _messageUpdatedStreamController =
+      StreamController<VorynMessage>.broadcast();
+  Stream<VorynMessage> get onMessageUpdated =>
+      _messageUpdatedStreamController.stream;
+
+  final _messageDeletedForMeController =
+      StreamController<Map<String, String>>.broadcast();
+  Stream<Map<String, String>> get onMessageDeletedForMe =>
+      _messageDeletedForMeController.stream;
+
+  final _threadClearedController = StreamController<String>.broadcast();
+  Stream<String> get onThreadCleared => _threadClearedController.stream;
+
   final _threadsChangedController = StreamController<void>.broadcast();
   Stream<void> get onThreadsChanged => _threadsChangedController.stream;
 
   SupabaseClient? get _client => VorynBackend.client;
   RealtimeChannel? _realtimeChannel;
+  RealtimeChannel? _userHiddenChannel;
+  RealtimeChannel? _userStateChannel;
   bool _subscribed = false;
 
   void notifyThreadsChanged() {
@@ -30,12 +45,86 @@ class VorynMessageRepository {
   final _seenMessageIds = <String>{};
   StreamSubscription<Map<String, dynamic>>? _authBridgeIncomingSub;
 
+  bool isVisibleToCurrentUser(
+    String threadId,
+    String messageId,
+    DateTime createdAt,
+  ) {
+    final currentUid = _client?.auth.currentUser?.id;
+    if (currentUid == null) return true;
+
+    if (VorynMessageLocalStore.instance.isMessageHidden(
+      currentUid,
+      messageId,
+    )) {
+      return false;
+    }
+
+    final cursor = VorynMessageLocalStore.instance.getThreadClearCursor(
+      currentUid,
+      threadId,
+    );
+    if (cursor != null) {
+      if (createdAt.isBefore(cursor.clearedBeforeCreatedAt)) {
+        return false;
+      }
+      if (createdAt.isAtSameMomentAs(cursor.clearedBeforeCreatedAt) &&
+          messageId.compareTo(cursor.clearedBeforeMessageId) <= 0) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  Future<void> syncUserVisibilityState() async {
+    final client = _client;
+    final currentUid = client?.auth.currentUser?.id;
+    if (client == null || currentUid == null) return;
+    try {
+      final stateRows = await client
+          .from('message_user_thread_state')
+          .select(
+            'thread_id, cleared_before_created_at, cleared_before_message_id',
+          );
+      for (final row in stateRows as List) {
+        final tid = row['thread_id'] as String?;
+        final dt = row['cleared_before_created_at'] as String?;
+        final mid = row['cleared_before_message_id'] as String?;
+        if (tid != null && dt != null && mid != null) {
+          VorynMessageLocalStore.instance.setThreadClearCursor(
+            currentUid,
+            tid,
+            DateTime.parse(dt),
+            mid,
+          );
+        }
+      }
+
+      final hiddenRows = await client
+          .from('message_user_hidden_messages')
+          .select('message_id');
+      for (final row in hiddenRows as List) {
+        final mid = row['message_id'] as String?;
+        if (mid != null) {
+          VorynMessageLocalStore.instance.markMessageHidden(currentUid, mid);
+        }
+      }
+    } catch (e) {
+      debugPrint(
+        '[MESSAGE_VISIBILITY] error syncing user visibility state: $e',
+      );
+    }
+  }
+
   void initializeRealtime() {
     if (_subscribed) return;
     final client = _client;
     if (client == null || client.auth.currentUser == null) return;
 
     _subscribed = true;
+    unawaited(syncUserVisibilityState());
+
     _realtimeChannel = client
         .channel('public:call_messages')
         .onPostgresChanges(
@@ -44,6 +133,38 @@ class VorynMessageRepository {
           table: 'call_messages',
           callback: (payload) {
             _handleIncomingRealtimeMessage(payload.newRecord);
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'call_messages',
+          callback: (payload) {
+            _handleUpdatedRealtimeMessage(payload.newRecord);
+          },
+        )
+        .subscribe();
+
+    _userHiddenChannel = client
+        .channel('public:message_user_hidden_messages')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'message_user_hidden_messages',
+          callback: (payload) {
+            _handleIncomingHiddenMessage(payload.newRecord);
+          },
+        )
+        .subscribe();
+
+    _userStateChannel = client
+        .channel('public:message_user_thread_state')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'message_user_thread_state',
+          callback: (payload) {
+            _handleIncomingThreadState(payload.newRecord);
           },
         )
         .subscribe();
@@ -67,6 +188,10 @@ class VorynMessageRepository {
   void disposeRealtime() {
     _realtimeChannel?.unsubscribe();
     _realtimeChannel = null;
+    _userHiddenChannel?.unsubscribe();
+    _userHiddenChannel = null;
+    _userStateChannel?.unsubscribe();
+    _userStateChannel = null;
     _authBridgeIncomingSub?.cancel();
     _authBridgeIncomingSub = null;
     _subscribed = false;
@@ -88,6 +213,13 @@ class VorynMessageRepository {
         _seenMessageIds.removeAll(_seenMessageIds.take(50).toList());
       }
 
+      if (!isVisibleToCurrentUser(msg.threadId, msg.id, msg.createdAt)) {
+        debugPrint(
+          '[MESSAGE_REALTIME] suppressed: not visible to current user messageId=${msg.id}',
+        );
+        return;
+      }
+
       // Remove from outbox if it matches our clientMessageId
       if (msg.clientMessageId != null) {
         VorynMessageLocalStore.instance.removeFromOutbox(msg.clientMessageId!);
@@ -103,6 +235,89 @@ class VorynMessageRepository {
       debugPrint('[MESSAGE_REALTIME] phase=ui_notified');
     } catch (e) {
       debugPrint('[MESSAGE_REALTIME] action=realtime_error error=$e');
+    }
+  }
+
+  void _handleUpdatedRealtimeMessage(Map<String, dynamic> record) {
+    try {
+      final msg = VorynMessage.fromMap(record);
+      debugPrint(
+        '[MESSAGE_REALTIME_UPDATE] messageId=${msg.id} threadId=${msg.threadId} version=${msg.messageVersion} isEdited=${msg.isEdited} isDeleted=${msg.isDeleted}',
+      );
+      if (!isVisibleToCurrentUser(msg.threadId, msg.id, msg.createdAt)) {
+        debugPrint(
+          '[MESSAGE_REALTIME_UPDATE] suppressed: not visible to current user messageId=${msg.id}',
+        );
+        return;
+      }
+      if (msg.isDeleted) {
+        VorynMessageLocalStore.instance.purgeMessage(msg.id);
+      }
+      _messageUpdatedStreamController.add(msg);
+      notifyThreadsChanged();
+    } catch (e) {
+      debugPrint('[MESSAGE_REALTIME_UPDATE] action=update_error error=$e');
+    }
+  }
+
+  void _handleIncomingHiddenMessage(Map<String, dynamic> record) {
+    try {
+      final currentUid = _client?.auth.currentUser?.id;
+      final userUid = record['user_uid'] as String?;
+      if (currentUid == null || userUid != currentUid) return;
+
+      final messageId = record['message_id'] as String?;
+      final threadId = record['thread_id'] as String?;
+      if (messageId == null) return;
+
+      VorynMessageLocalStore.instance.markMessageHidden(currentUid, messageId);
+      _messageDeletedForMeController.add({
+        'threadId': threadId ?? '',
+        'messageId': messageId,
+      });
+      if (threadId != null && threadId.isNotEmpty) {
+        unawaited(
+          VorynBackgroundAuthBridge.instance.removeMessageFromNotification(
+            threadId,
+            messageId,
+          ),
+        );
+      }
+      notifyThreadsChanged();
+    } catch (e) {
+      debugPrint('[MESSAGE_VISIBILITY] error handling hidden realtime: $e');
+    }
+  }
+
+  void _handleIncomingThreadState(Map<String, dynamic> record) {
+    try {
+      final currentUid = _client?.auth.currentUser?.id;
+      final userUid = record['user_uid'] as String?;
+      if (currentUid == null || userUid != currentUid) return;
+
+      final threadId = record['thread_id'] as String?;
+      final dt = record['cleared_before_created_at'] as String?;
+      final mid = record['cleared_before_message_id'] as String?;
+      if (threadId == null) return;
+
+      if (dt != null && mid != null) {
+        VorynMessageLocalStore.instance.setThreadClearCursor(
+          currentUid,
+          threadId,
+          DateTime.parse(dt),
+          mid,
+        );
+      }
+      VorynMessageLocalStore.instance.clearThreadMessages(threadId);
+      unawaited(
+        VorynBackgroundAuthBridge.instance.dismissMessageNotification(threadId),
+      );
+      _threadClearedController.add(threadId);
+      notifyThreadsChanged();
+    } catch (e) {
+      debugPrint(
+        '[MESSAGE_VISIBILITY] error handling thread state realtime: $e',
+      );
     }
   }
 
@@ -151,6 +366,7 @@ class VorynMessageRepository {
     }
 
     try {
+      unawaited(syncUserVisibilityState());
       final rows = await client.rpc('list_my_message_threads');
       final list = rows as List<dynamic>;
       debugPrint('[MESSAGE_INBOX] action=rpc_result rows=${list.length}');
@@ -320,6 +536,139 @@ class VorynMessageRepository {
     }
   }
 
+  Future<VorynMessage> editMessage({
+    required String messageId,
+    required String newBody,
+  }) async {
+    final client = _client;
+    final currentUid = client?.auth.currentUser?.id;
+    if (client == null || currentUid == null) {
+      throw StateError('Authentication required');
+    }
+
+    final text = newBody.trim();
+    if (text.isEmpty || text.length > 120) {
+      throw ArgumentError('Message body must be between 1 and 120 characters');
+    }
+
+    debugPrint('[MESSAGE_MUTATION] editMessage id=$messageId');
+    final rows = await client.rpc(
+      'edit_call_message',
+      params: {'p_message_id': messageId, 'p_body': text},
+    );
+
+    final list = rows as List<dynamic>;
+    if (list.isEmpty) {
+      throw StateError('Message edit failed');
+    }
+
+    final updated = VorynMessage.fromMap(
+      Map<String, dynamic>.from(list.first as Map),
+    );
+    _messageUpdatedStreamController.add(updated);
+    notifyThreadsChanged();
+    return updated;
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    final client = _client;
+    final currentUid = client?.auth.currentUser?.id;
+    if (client == null || currentUid == null) {
+      throw StateError('Authentication required');
+    }
+
+    debugPrint('[MESSAGE_MUTATION] deleteMessage id=$messageId');
+    await client.rpc(
+      'delete_call_message',
+      params: {'p_message_id': messageId},
+    );
+
+    VorynMessageLocalStore.instance.purgeMessage(messageId);
+    notifyThreadsChanged();
+  }
+
+  Future<void> deleteMessageForMe({
+    required String threadId,
+    required String messageId,
+  }) async {
+    final client = _client;
+    final currentUid = client?.auth.currentUser?.id;
+    if (client == null || currentUid == null) {
+      throw StateError('Authentication required');
+    }
+
+    debugPrint(
+      '[MESSAGE_VISIBILITY] deleteMessageForMe id=$messageId threadId=$threadId',
+    );
+
+    VorynMessageLocalStore.instance.markMessageHidden(currentUid, messageId);
+    _messageDeletedForMeController.add({
+      'threadId': threadId,
+      'messageId': messageId,
+    });
+    unawaited(
+      VorynBackgroundAuthBridge.instance.removeMessageFromNotification(
+        threadId,
+        messageId,
+      ),
+    );
+
+    try {
+      await client.rpc(
+        'delete_call_message_for_me',
+        params: {'p_message_id': messageId},
+      );
+    } catch (e, st) {
+      debugPrint('[MESSAGE_VISIBILITY] deleteMessageForMe rpc error: $e\n$st');
+      rethrow;
+    }
+
+    notifyThreadsChanged();
+  }
+
+  Future<void> clearThread(String threadId) async {
+    final client = _client;
+    final currentUid = client?.auth.currentUser?.id;
+    if (client == null || currentUid == null) {
+      throw StateError('Authentication required');
+    }
+
+    debugPrint('[MESSAGE_VISIBILITY] clearThread threadId=$threadId');
+
+    try {
+      final res = await client.rpc(
+        'clear_call_message_thread',
+        params: {'p_thread_id': threadId},
+      );
+
+      final list = res as List<dynamic>;
+      if (list.isNotEmpty) {
+        final row = Map<String, dynamic>.from(list.first as Map);
+        final rawCreatedAt = row['out_cleared_before_created_at'] as String?;
+        final rawMessageId = row['out_cleared_before_message_id'] as String?;
+        if (rawCreatedAt != null && rawMessageId != null) {
+          final clearedCreatedAt = DateTime.parse(rawCreatedAt);
+          VorynMessageLocalStore.instance.setThreadClearCursor(
+            currentUid,
+            threadId,
+            clearedCreatedAt,
+            rawMessageId,
+          );
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[MESSAGE_VISIBILITY] clearThread rpc error: $e\n$st');
+      rethrow;
+    }
+
+    VorynMessageLocalStore.instance.clearThreadMessages(threadId);
+    unawaited(
+      VorynBackgroundAuthBridge.instance.dismissMessageNotification(threadId),
+    );
+    _threadClearedController.add(threadId);
+    notifyThreadsChanged();
+  }
+
   Future<void> markThreadRead(
     String threadId, {
     String? lastSeenMessageId,
@@ -336,9 +685,8 @@ class VorynMessageRepository {
         },
       );
 
-      await VorynBackgroundAuthBridge.instance.dismissMessageNotification(
-        threadId,
-      );
+      // Do not dismiss Android notification simply because thread is viewed/read in-app.
+      // Notifications remain in shade until user swipes, taps, replaces, or explicitly dismisses.
       unawaited(refreshUnreadCount());
     } catch (e) {
       debugPrint('[MSG_REPO] error marking thread read: $e');

@@ -136,6 +136,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "clearBackgroundAuth" -> {
                     VorynBackgroundAuthStore.clear(this)
+                    VorynMessageNotificationManager.cancelAllMessageNotifications(this)
                     result.success(true)
                 }
                 "getPendingMessageThread" -> {
@@ -147,6 +148,14 @@ class MainActivity : FlutterActivity() {
                     val threadId = call.argument<String>("threadId") ?: ""
                     if (threadId.isNotBlank()) {
                         VorynMessageNotificationManager.dismissThreadNotification(this, threadId)
+                    }
+                    result.success(true)
+                }
+                "removeMessageFromNotification" -> {
+                    val threadId = call.argument<String>("threadId") ?: ""
+                    val messageId = call.argument<String>("messageId") ?: ""
+                    if (threadId.isNotBlank() && messageId.isNotBlank()) {
+                        VorynMessageNotificationManager.removeMessageFromNotification(this, threadId, messageId)
                     }
                     result.success(true)
                 }
@@ -327,6 +336,7 @@ class MainActivity : FlutterActivity() {
             Log.d("VorynMsg", "[MESSAGE_NAV] source=intent action=${intent.action} threadId=$threadId")
             if (!threadId.isNullOrBlank() && threadId != "inbox") {
                 Log.d("VorynMsg", "[DEEP_LINK] message thread deep link: $threadId")
+                VorynMessageNotificationManager.dismissThreadNotification(this, threadId)
                 pendingThreadId = threadId
                 mainHandler.post {
                     messagesChannel?.invokeMethod("onOpenThread", mapOf("threadId" to threadId))

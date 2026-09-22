@@ -299,10 +299,14 @@ class _ThreadListTile extends StatelessWidget {
         ? _formatTime(thread.lastMessageCreatedAt!)
         : '';
 
-    final snippet = thread.lastMessageBody ?? 'No messages yet';
-    final formattedSnippet = thread.lastMessageRemindToCall
-        ? '📞 $snippet'
-        : snippet;
+    final String formattedSnippet;
+    if (thread.lastMessageBody == null) {
+      formattedSnippet = 'No messages yet';
+    } else if (thread.lastMessageRemindToCall) {
+      formattedSnippet = '📞 ${thread.lastMessageBody}';
+    } else {
+      formattedSnippet = thread.lastMessageBody!;
+    }
 
     return InkWell(
       onTap: onTap,

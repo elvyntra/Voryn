@@ -90,9 +90,12 @@ class VorynMessage {
     required this.recipientUid,
     required this.senderName,
     required this.senderVorynId,
-    required this.body,
+    this.body,
     required this.remindToCall,
     required this.createdAt,
+    this.editedAt,
+    this.deletedAt,
+    this.messageVersion = 1,
     this.clientMessageId,
     this.status = VorynMessageDeliveryStatus.sent,
   });
@@ -103,13 +106,19 @@ class VorynMessage {
   final String recipientUid;
   final String senderName;
   final String senderVorynId;
-  final String body;
+  final String? body;
   final bool remindToCall;
   final DateTime createdAt;
+  final DateTime? editedAt;
+  final DateTime? deletedAt;
+  final int messageVersion;
   final String? clientMessageId;
   final VorynMessageDeliveryStatus status;
 
   bool isOutgoing(String currentUid) => senderUid == currentUid;
+  bool get isEdited => editedAt != null && deletedAt == null;
+  bool get isDeleted => deletedAt != null;
+  String get displayBody => isDeleted ? 'Message deleted' : (body ?? '');
 
   factory VorynMessage.fromMap(Map<String, dynamic> map) {
     final id = (map['id'] ?? '').toString();
@@ -121,11 +130,18 @@ class VorynMessage {
     final senderName = (nameStr != null && nameStr.isNotEmpty)
         ? nameStr
         : (vorynIdStr.isNotEmpty ? vorynIdStr : 'Voryn User');
-    final body = (map['body'] ?? '').toString();
+    final rawBody = map['body']?.toString();
     final remind = map['remind_to_call'] == true;
     final createdAt = map['created_at'] != null
         ? DateTime.tryParse(map['created_at'].toString()) ?? DateTime.now()
         : DateTime.now();
+    final editedAt = map['edited_at'] != null
+        ? DateTime.tryParse(map['edited_at'].toString())
+        : null;
+    final deletedAt = map['deleted_at'] != null
+        ? DateTime.tryParse(map['deleted_at'].toString())
+        : null;
+    final version = (map['message_version'] as num?)?.toInt() ?? 1;
     final clientMsgId = map['client_message_id']?.toString();
 
     return VorynMessage(
@@ -135,15 +151,25 @@ class VorynMessage {
       recipientUid: recipientUid,
       senderName: senderName,
       senderVorynId: vorynIdStr,
-      body: body,
+      body: rawBody,
       remindToCall: remind,
       createdAt: createdAt,
+      editedAt: editedAt,
+      deletedAt: deletedAt,
+      messageVersion: version,
       clientMessageId: clientMsgId,
       status: VorynMessageDeliveryStatus.sent,
     );
   }
 
-  VorynMessage copyWith({String? id, VorynMessageDeliveryStatus? status}) {
+  VorynMessage copyWith({
+    String? id,
+    String? body,
+    DateTime? editedAt,
+    DateTime? deletedAt,
+    int? messageVersion,
+    VorynMessageDeliveryStatus? status,
+  }) {
     return VorynMessage(
       id: id ?? this.id,
       threadId: threadId,
@@ -151,9 +177,12 @@ class VorynMessage {
       recipientUid: recipientUid,
       senderName: senderName,
       senderVorynId: senderVorynId,
-      body: body,
+      body: body ?? this.body,
       remindToCall: remindToCall,
       createdAt: createdAt,
+      editedAt: editedAt ?? this.editedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      messageVersion: messageVersion ?? this.messageVersion,
       clientMessageId: clientMessageId,
       status: status ?? this.status,
     );

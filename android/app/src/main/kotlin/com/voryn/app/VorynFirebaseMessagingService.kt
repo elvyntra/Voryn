@@ -99,10 +99,11 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
                 val senderName = data["sender_name"] ?: "Voryn User"
                 val body = data["body"] ?: ""
                 val remindToCall = data["remind_to_call"] == "true"
+                val version = data["message_version"]?.toLongOrNull() ?: 1L
                 val timestamp = System.currentTimeMillis()
 
                 val appState = if (MainActivity.isAppInForeground) "FOREGROUND" else "BACKGROUND_OR_CLOSED"
-                Log.d("VorynMsg", "[MESSAGE_FCM] phase=enter type=call_message messageId=$messageId threadId=$threadId appState=$appState")
+                Log.d("VorynMsg", "[MESSAGE_FCM] phase=enter type=call_message messageId=$messageId threadId=$threadId version=$version appState=$appState")
 
                 if (threadId.isNotBlank() && body.isNotBlank()) {
                     Log.d("VorynMsg", "[MESSAGE_FCM] phase=before_notification")
@@ -114,13 +115,52 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
                         senderName,
                         body,
                         remindToCall,
-                        timestamp
+                        timestamp,
+                        version
                     )
                     Log.d("VorynMsg", "[MESSAGE_FCM] phase=after_notification")
 
                     Log.d("VorynMsg", "[MESSAGE_FCM] phase=before_delegate")
                     MainActivity.notifyIncomingMessage(threadId, messageId, senderUid, body)
                     Log.d("VorynMsg", "[MESSAGE_FCM] phase=complete")
+                }
+                return
+            }
+            "call_message_edited" -> {
+                val messageId = data["message_id"] ?: data["id"] ?: ""
+                val threadId = data["thread_id"] ?: ""
+                val body = data["body"] ?: ""
+                val remindToCall = data["remind_to_call"] == "true"
+                val version = data["message_version"]?.toLongOrNull() ?: 1L
+
+                Log.d("VorynMsg", "[MESSAGE_FCM] phase=enter type=call_message_edited messageId=$messageId threadId=$threadId version=$version")
+
+                if (threadId.isNotBlank() && messageId.isNotBlank() && body.isNotBlank()) {
+                    VorynMessageNotificationManager.updateMessageNotification(
+                        this,
+                        messageId,
+                        threadId,
+                        body,
+                        remindToCall,
+                        version
+                    )
+                }
+                return
+            }
+            "call_message_deleted" -> {
+                val messageId = data["message_id"] ?: data["id"] ?: ""
+                val threadId = data["thread_id"] ?: ""
+                val version = data["message_version"]?.toLongOrNull() ?: 1L
+
+                Log.d("VorynMsg", "[MESSAGE_FCM] phase=enter type=call_message_deleted messageId=$messageId threadId=$threadId version=$version")
+
+                if (threadId.isNotBlank() && messageId.isNotBlank()) {
+                    VorynMessageNotificationManager.deleteMessageNotification(
+                        this,
+                        messageId,
+                        threadId,
+                        version
+                    )
                 }
                 return
             }
