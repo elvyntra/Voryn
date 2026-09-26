@@ -246,4 +246,75 @@ object IncomingCallNotificationManager {
             Log.d("VorynCall", "[INCOMING_STATE] state=$state callId=$callId")
         } catch (_: Exception) {}
     }
+
+    private const val NOTIFICATION_ID_WAITING = 4002
+
+    fun showWaitingCall(
+        context: Context,
+        callId: String,
+        callerName: String,
+        callType: String
+    ) {
+        ensureChannel(context)
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val declineIntent = Intent(context, IncomingCallActionReceiver::class.java).apply {
+            action = "com.voryn.app.ACTION_DECLINE_WAITING_CALL"
+            putExtra("call_id", callId)
+            data = android.net.Uri.parse("voryn://call/waiting/decline/$callId")
+        }
+        val declinePendingIntent = PendingIntent.getBroadcast(
+            context,
+            callId.hashCode(),
+            declineIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val targetActivityClass = if (VorynCallActivity.activeInstance != null) {
+            VorynCallActivity::class.java
+        } else {
+            MainActivity::class.java
+        }
+
+        val acceptIntent = Intent(context, targetActivityClass).apply {
+            action = "com.voryn.app.ACTION_HOLD_AND_ACCEPT_CALL"
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("call_id", callId)
+            putExtra("caller_name", callerName)
+            putExtra("call_type", callType)
+            data = android.net.Uri.parse("voryn://call/waiting/accept/$callId")
+        }
+        val acceptPendingIntent = PendingIntent.getActivity(
+            context,
+            callId.hashCode() + 1,
+            acceptIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val callTypeLabel = if (callType == "video") "Incoming video call" else "Incoming audio call"
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.sym_call_incoming)
+            .setContentTitle("Call Waiting · $callerName")
+            .setContentText(callTypeLabel)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setContentIntent(acceptPendingIntent)
+            .addAction(0, "Decline", declinePendingIntent)
+            .addAction(0, "Hold & Accept", acceptPendingIntent)
+
+        val notification = builder.build()
+        manager.notify("voryn_waiting_$callId", NOTIFICATION_ID_WAITING, notification)
+        Log.d("VorynCall", "[CALL_WAITING] notification posted tag=voryn_waiting_$callId id=$NOTIFICATION_ID_WAITING")
+    }
+
+    fun cancelWaitingCallNotification(context: Context, callId: String) {
+        try {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.cancel("voryn_waiting_$callId", NOTIFICATION_ID_WAITING)
+            VorynCallStateManager.clearWaitingCall(context, callId)
+            Log.d("VorynCall", "[CALL_WAITING] notification cancelled tag=voryn_waiting_$callId")
+        } catch (_: Exception) {}
+    }
 }

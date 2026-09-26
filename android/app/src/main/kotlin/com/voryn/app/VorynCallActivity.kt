@@ -241,6 +241,17 @@ class VorynCallActivity : FlutterActivity() {
             return
         }
 
+        if (action == "com.voryn.app.ACTION_HOLD_AND_ACCEPT_CALL" || launchData?.get("actionId") == "hold_and_accept") {
+            Log.d("VorynCall", "[CALL_ACTIVITY] onNewIntent hold_and_accept callId=$callId")
+            if (callId.isNotBlank()) {
+                IncomingCallNotificationManager.cancelWaitingCallNotification(this, callId)
+            }
+            if (launchData != null) {
+                bridge?.methodChannel?.invokeMethod("onCallLaunchIntent", launchData)
+            }
+            return
+        }
+
         if (action == "com.voryn.app.ACTION_ACCEPT_INCOMING_CALL" || action == "ACCEPT_CALL" || launchData?.get("actionId") == "accept") {
             if (callId.isNotBlank()) {
                 if (callId == currentCallId) {
@@ -283,7 +294,7 @@ class VorynCallActivity : FlutterActivity() {
     private fun extractCallLaunchData(intent: Intent?): Map<String, String>? {
         if (intent == null) return null
         val action = intent.action ?: ""
-        val actionId = intent.getStringExtra("action_id") ?: intent.getStringExtra("action") ?: "accept"
+        val actionId = intent.getStringExtra("action_id") ?: intent.getStringExtra("action") ?: if (action == "com.voryn.app.ACTION_HOLD_AND_ACCEPT_CALL") "hold_and_accept" else "accept"
         val payload = intent.getStringExtra("payload")
             ?: intent.getStringExtra("call_id")
             ?: intent.getStringExtra("callId")

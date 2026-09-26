@@ -9,16 +9,10 @@ object VorynCallHostManager {
     enum class CallPresentationOrigin { IN_APP, EXTERNAL }
 
     @Volatile
-    private var activeCallId: String? = null
-
-    @Volatile
     private var activeHost: HostType = HostType.NONE
 
-    @Volatile
-    private var callState: VorynCallStateManager.CallState = VorynCallStateManager.CallState.NONE
-
-    @Volatile
-    private var callOrigin: CallPresentationOrigin? = null
+    private val callOrigins = mutableMapOf<String, CallPresentationOrigin>()
+    private val callStates = mutableMapOf<String, VorynCallStateManager.CallState>()
 
     @Synchronized
     fun claimCall(
@@ -28,78 +22,72 @@ object VorynCallHostManager {
         origin: CallPresentationOrigin = CallPresentationOrigin.EXTERNAL
     ): Boolean {
         if (callId.isBlank()) return false
-        if (activeCallId != null && activeCallId != callId && activeHost != HostType.NONE) {
+        if (activeHost != HostType.NONE && activeHost != host) {
             Log.w(
                 TAG,
-                "[HOST_OWNERSHIP] cannot claim callId=$callId for host=$host, already owned by callId=$activeCallId host=$activeHost"
+                "[HOST_OWNERSHIP] cannot claim callId=$callId for host=$host, already owned by activeHost=$activeHost"
             )
             return false
         }
-        activeCallId = callId
         activeHost = host
-        callState = state
-        if (callOrigin == null) {
-            callOrigin = origin
-        } else if (callOrigin != origin) {
-            Log.d(TAG, "[CALL_ORIGIN] callId=$callId existing=$callOrigin requested=$origin decision=ignore_immutable_origin")
+        callStates[callId] = state
+        if (!callOrigins.containsKey(callId)) {
+            callOrigins[callId] = origin
         }
-        if (host == HostType.LOCKED_CALL && callOrigin == CallPresentationOrigin.IN_APP) {
+        if (host == HostType.LOCKED_CALL && origin == CallPresentationOrigin.IN_APP) {
             Log.w(TAG, "[CALL_INVARIANT] suspicious combination: owner=LOCKED_CALL origin=IN_APP callId=$callId")
         }
-        Log.d(TAG, "[CALL_HOST] callId=$callId owner=$host state=$state origin=$callOrigin")
-        Log.d(TAG, "[HOST_OWNERSHIP] native host ownership = $host callId=$callId origin=$callOrigin")
+        Log.d(TAG, "[CALL_HOST] claimCall callId=$callId owner=$host state=$state origin=${callOrigins[callId]}")
         return true
     }
 
     @Synchronized
     fun updateState(callId: String, newState: VorynCallStateManager.CallState) {
-        if (activeCallId == callId) {
-            callState = newState
-            Log.d(TAG, "[CALL_HOST] callId=$callId owner=$activeHost state=$newState origin=$callOrigin")
+        if (callStates.containsKey(callId)) {
+            callStates[callId] = newState
+            Log.d(TAG, "[CALL_HOST] updateState callId=$callId owner=$activeHost state=$newState origin=${callOrigins[callId]}")
         }
     }
 
     @Synchronized
     fun getOrigin(callId: String? = null): CallPresentationOrigin {
-        if (callOrigin == null) {
-            Log.d(TAG, "[CALL_PRESENTATION] origin missing resolvedFallback=EXTERNAL")
+        if (callId != null && callOrigins.containsKey(callId)) {
+            return callOrigins[callId]!!
         }
-        return callOrigin ?: CallPresentationOrigin.EXTERNAL
+        return callOrigins.values.firstOrNull() ?: CallPresentationOrigin.EXTERNAL
     }
 
     @Synchronized
     fun setOrigin(callId: String, origin: CallPresentationOrigin) {
-        if (activeCallId == callId || activeCallId == null) {
-            if (callOrigin == null) {
-                callOrigin = origin
-                Log.d(TAG, "[CALL_HOST] callId=$callId owner=$activeHost state=$callState origin=$origin")
-            } else if (callOrigin != origin) {
-                Log.d(TAG, "[CALL_ORIGIN] callId=$callId existing=$callOrigin requested=$origin decision=ignore_immutable_origin")
-            }
+        if (!callOrigins.containsKey(callId)) {
+            callOrigins[callId] = origin
+            Log.d(TAG, "[CALL_HOST] setOrigin callId=$callId owner=$activeHost origin=$origin")
         }
     }
 
     @Synchronized
     fun releaseCall(callId: String, host: HostType) {
-        if (activeCallId == callId && activeHost == host) {
-            Log.d(TAG, "[HOST_OWNERSHIP] released callId=$callId host=$host")
-            activeCallId = null
-            activeHost = HostType.NONE
-            callState = VorynCallStateManager.CallState.NONE
-            callOrigin = null
+        if (activeHost == host) {
+            callStates.remove(callId)
+            callOrigins.remove(callId)
+            Log.d(TAG, "[HOST_OWNERSHIP] released callId=$callId host=$host remaining=${callStates.keys}")
+            if (callStates.isEmpty()) {
+                activeHost = HostType.NONE
+                Log.d(TAG, "[HOST_OWNERSHIP] all calls released, activeHost reset to NONE")
+            }
         }
     }
 
     @Synchronized
     fun hasActiveOwner(callId: String): Boolean {
-        return (activeCallId == callId) &&
-            (activeHost == HostType.LOCKED_CALL || activeHost == HostType.MAIN) &&
-            (callState == VorynCallStateManager.CallState.ACTIVE || callState == VorynCallStateManager.CallState.ACCEPTING)
+        val st = callStates[callId]
+        return (activeHost == HostType.LOCKED_CALL || activeHost == HostType.MAIN) &&
+            (st == VorynCallStateManager.CallState.ACTIVE || st == VorynCallStateManager.CallState.ACCEPTING || st == VorynCallStateManager.CallState.HELD)
     }
 
     @Synchronized
     fun isCallOwnedByLockedCall(callId: String): Boolean {
-        return activeHost == HostType.LOCKED_CALL && (activeCallId == null || activeCallId == callId)
+        return activeHost == HostType.LOCKED_CALL && (callStates.isEmpty() || callStates.containsKey(callId))
     }
 
     @Synchronized
@@ -108,11 +96,14 @@ object VorynCallHostManager {
     }
 
     @Synchronized
-    fun getActiveCallId(): String? = activeCallId
+    fun getActiveCallId(): String? = callStates.keys.firstOrNull()
 
     @Synchronized
     fun getActiveHost(): HostType = activeHost
 
     @Synchronized
-    fun getState(): VorynCallStateManager.CallState = callState
+    fun getState(callId: String? = null): VorynCallStateManager.CallState {
+        if (callId != null) return callStates[callId] ?: VorynCallStateManager.CallState.NONE
+        return callStates.values.firstOrNull() ?: VorynCallStateManager.CallState.NONE
+    }
 }

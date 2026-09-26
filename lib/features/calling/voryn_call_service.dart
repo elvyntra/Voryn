@@ -99,6 +99,14 @@ class VorynCallService {
         return const VorynCallRequest(
           error: 'Calling is unavailable for this user.',
         );
+      } else if (msg.contains('already_on_call')) {
+        return const VorynCallRequest(
+          error: "You're already on a call.",
+        );
+      } else if (msg.contains('user_busy')) {
+        return const VorynCallRequest(
+          error: 'This user is currently busy on another call.',
+        );
       } else if (msg.contains('user not found')) {
         return const VorynCallRequest(error: 'User not found.');
       }
@@ -373,10 +381,82 @@ class VorynCallService {
     } catch (_) {}
   }
 
+  Future<Map<String, dynamic>?> holdAndAccept({
+    required String activeCallId,
+    required String waitingCallId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final dynamic res = await client.rpc(
+        'hold_and_accept_waiting_call',
+        params: {
+          'p_active_call_id': activeCallId,
+          'p_waiting_call_id': waitingCallId,
+        },
+      );
+      if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MULTI_CALL] hold_and_accept RPC error: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> switchHeldCall({
+    required String activeCallId,
+    required String heldCallId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final dynamic res = await client.rpc(
+        'switch_held_call',
+        params: {
+          'p_current_active_call_id': activeCallId,
+          'p_current_held_call_id': heldCallId,
+        },
+      );
+      if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MULTI_CALL] switch_held_call RPC error: $e');
+      return null;
+    }
+  }
+
+  Future<bool> setCallHoldState(String callId, bool isHeld) async {
+    final client = VorynBackend.client;
+    if (client == null) return false;
+    try {
+      final dynamic res = await client.rpc(
+        'set_call_hold_state',
+        params: {'call_uuid': callId, 'is_held': isHeld},
+      );
+      final user = client.auth.currentUser?.id ?? 'local';
+      try {
+        final channel = client.channel('call_room_$callId');
+        await channel.sendBroadcastMessage(
+          event: isHeld ? 'call_held' : 'call_resumed',
+          payload: {'callId': callId, 'isHeld': isHeld, 'heldBy': user},
+        );
+      } catch (_) {}
+      return res == true;
+    } catch (e) {
+      debugPrint('[MULTI_CALL] set_call_hold_state error: $e');
+      return false;
+    }
+  }
+
   RealtimeChannel? subscribeToCallState(
     String callId,
-    void Function(String status) onTerminal,
-  ) {
+    void Function(String status) onTerminal, {
+    void Function(String status, String? heldBy)? onStatusChanged,
+  }) {
     final client = VorynBackend.client;
     if (client == null) return null;
 
@@ -400,7 +480,29 @@ class VorynCallService {
       },
     );
 
-    // 2. Authoritative Postgres CDC updates on calls table
+    // 2. Peer broadcast hold state as low-latency hint
+    channel.onBroadcast(
+      event: 'call_held',
+      callback: (payload) {
+        final heldBy = payload['heldBy']?.toString();
+        debugPrint(
+          '[CALL $callId] low-latency call_held hint received (heldBy=$heldBy)',
+        );
+        onStatusChanged?.call('on_hold', heldBy);
+      },
+    );
+
+    channel.onBroadcast(
+      event: 'call_resumed',
+      callback: (payload) {
+        debugPrint(
+          '[CALL $callId] low-latency call_resumed hint received',
+        );
+        onStatusChanged?.call('connected', null);
+      },
+    );
+
+    // 3. Authoritative Postgres CDC updates on calls table
     channel.onPostgresChanges(
       event: PostgresChangeEvent.update,
       schema: 'public',
@@ -412,6 +514,7 @@ class VorynCallService {
       ),
       callback: (payload) {
         final status = payload.newRecord['status'] as String?;
+        final heldBy = payload.newRecord['held_by'] as String?;
         if (status == 'completed' ||
             status == 'cancelled' ||
             status == 'declined' ||
@@ -421,6 +524,11 @@ class VorynCallService {
             '[CALL $callId] authoritative remote terminal event via postgres CDC: status=$status',
           );
           handleTerminal(status ?? 'completed');
+        } else if (status != null) {
+          debugPrint(
+            '[CALL $callId] authoritative status change via postgres CDC: status=$status heldBy=$heldBy',
+          );
+          onStatusChanged?.call(status, heldBy);
         }
       },
     );

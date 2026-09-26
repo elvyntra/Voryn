@@ -9,6 +9,7 @@ import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
+import 'multi_call_coordinator.dart';
 import 'voryn_call_history_service.dart';
 import 'voryn_call_latency_tracker.dart';
 import 'voryn_call_runtime_coordinator.dart';
@@ -18,7 +19,9 @@ import 'widgets/add_participant_sheet.dart';
 import 'widgets/call_avatar_rings.dart';
 import 'widgets/call_controls.dart';
 import 'widgets/call_top_bar.dart';
+import 'widgets/call_waiting_banner.dart';
 import 'widgets/call_waveform.dart';
+import 'widgets/held_call_bar.dart';
 
 class ActiveAudioCallScreen extends StatefulWidget {
   const ActiveAudioCallScreen({
@@ -77,6 +80,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     debugPrint('[CALL_ROUTE] active route initState');
     LockScreenService.cancelNativeIncomingCall(widget.callId, reason: 'accept');
     _coordinator = VorynCallRuntimeCoordinator.forCall(widget.callId);
+    MultiCallCoordinator.instance.addListener(_onMultiCallChanged);
     _latencyTracker =
         VorynCallLatencyTracker.get(widget.callId) ??
         VorynCallLatencyTracker.start(callId: widget.callId);
@@ -109,6 +113,27 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         );
 
     _start();
+  }
+
+  void _onMultiCallChanged() {
+    if (!mounted || _ending || _ended) return;
+    final activeId = MultiCallCoordinator.instance.activeCallId;
+    if (activeId != null &&
+        activeId != widget.callId &&
+        MultiCallCoordinator.instance.heldCallId == widget.callId) {
+      _coordinator.isTransitioning = true;
+      _detachRoomListener();
+      _coordinator.detachScreen();
+      final newSession =
+          MultiCallCoordinator.instance.sessionsByCallId[activeId];
+      final isVideo = MultiCallCoordinator.instance.waitingCallType == 'video';
+      context.pushReplacement(
+        isVideo ? '/active-video-call/$activeId' : '/active-audio-call/$activeId',
+        extra: {'session': newSession},
+      );
+      return;
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _start() async {
@@ -146,6 +171,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (widget.existingSession != null) {
       _session = widget.existingSession;
       _coordinator.session = _session;
+      MultiCallCoordinator.instance.registerSession(widget.callId, _session!);
       _isConnected = true;
       _speakerOn = false;
       unawaited(_session?.setSpeakerEnabled(false));
@@ -171,6 +197,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         video: false,
         latencyTracker: _latencyTracker,
       );
+      MultiCallCoordinator.instance.registerSession(widget.callId, _session!);
       _speakerOn = false;
       await _session?.setSpeakerEnabled(false);
       _attachRoomListener();
@@ -203,21 +230,31 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     }
   }
 
-  void _handleRealtimeStatus(String status) {
-    if (status == 'connected' && !_isConnected) {
-      _isConnected = true;
-      _coordinator.updateProximity(isConnected: true, mediaMode: 'audio');
-      _notifyCallActive();
-      _callStatusText = '';
-      _startTimer();
-      unawaited(_latencyTracker?.stage('call_connected_ui'));
-      unawaited(
-        LockScreenService.isKeyguardLocked().then((isLocked) {
-          debugPrint(
-            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
-          );
-        }),
+  void _handleRealtimeStatus(String status, [String? heldBy]) {
+    final currentUid = VorynBackend.client?.auth.currentUser?.id;
+    if (status == 'on_hold') {
+      MultiCallCoordinator.instance.setRemoteHoldState(
+        widget.callId,
+        heldBy != null && heldBy != currentUid ? heldBy : null,
       );
+      if (mounted) setState(() {});
+    } else if (status == 'connected') {
+      MultiCallCoordinator.instance.setRemoteHoldState(widget.callId, null);
+      if (!_isConnected) {
+        _isConnected = true;
+        _coordinator.updateProximity(isConnected: true, mediaMode: 'audio');
+        _notifyCallActive();
+        _callStatusText = '';
+        _startTimer();
+        unawaited(_latencyTracker?.stage('call_connected_ui'));
+        unawaited(
+          LockScreenService.isKeyguardLocked().then((isLocked) {
+            debugPrint(
+              '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+            );
+          }),
+        );
+      }
       if (mounted) setState(() {});
     } else if (status == 'ringing' && !_isConnected) {
       _callStatusText = 'Ringing…';
@@ -359,6 +396,12 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     final next = !_held;
     if (mounted) setState(() => _held = next);
     _coordinator.updateProximity(isHeld: next);
+    await const VorynCallService().setCallHoldState(widget.callId, next);
+    if (next) {
+      await _session?.hold();
+    } else {
+      await _session?.resume();
+    }
   }
 
   Future<void> _toggleShare() async {
@@ -387,14 +430,36 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     );
   }
 
-  Future<void> _endCall() {
-    if (_ending || _ended) return Future<void>.value();
+  Future<void> _endCall() async {
+    if (_ending || _ended) return;
     if (mounted) {
       setState(() => _ending = true);
     } else {
       _ending = true;
     }
     debugPrint('[CALL ${widget.callId}] local end pressed');
+    final heldId = MultiCallCoordinator.instance.heldCallId;
+    if (heldId != null &&
+        MultiCallCoordinator.instance.activeCallId == widget.callId) {
+      _coordinator.isTransitioning = true;
+      await MultiCallCoordinator.instance.endCall(
+        widget.callId,
+        isLocalInitiator: true,
+      );
+      if (mounted) {
+        final heldSession =
+            MultiCallCoordinator.instance.sessionsByCallId[heldId];
+        context.pushReplacement(
+          '/active-audio-call/$heldId',
+          extra: {'session': heldSession},
+        );
+      }
+      return;
+    }
+    await MultiCallCoordinator.instance.endCall(
+      widget.callId,
+      isLocalInitiator: true,
+    );
     return _performTeardown(isLocalInitiator: true);
   }
 
@@ -478,10 +543,13 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
 
   @override
   void dispose() {
+    MultiCallCoordinator.instance.removeListener(_onMultiCallChanged);
     _timer?.cancel();
     _detachRoomListener();
     _durationNotifier.dispose();
-    if (!_coordinator.isTransitioning && !_coordinator.isEnded) {
+    if (!_coordinator.isTransitioning &&
+        !_coordinator.isEnded &&
+        MultiCallCoordinator.instance.heldCallId != widget.callId) {
       _coordinator.performTeardown(isLocalInitiator: true);
     }
     _coordinator.detachScreen();
@@ -532,6 +600,48 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                   );
                 },
               ),
+
+              // Multi-Call Waiting Banner
+              if (MultiCallCoordinator.instance.hasWaitingCall)
+                CallWaitingBanner(
+                  callerName:
+                      MultiCallCoordinator.instance.waitingCallerName ??
+                      'Voryn User',
+                  callType:
+                      MultiCallCoordinator.instance.waitingCallType ??
+                      'audio',
+                  isLoading:
+                      MultiCallCoordinator.instance.isTransitionInFlight,
+                  onDecline: () {
+                    final waitingId =
+                        MultiCallCoordinator.instance.waitingCallId;
+                    if (waitingId != null) {
+                      MultiCallCoordinator.instance.declineWaitingCall(
+                        waitingId,
+                      );
+                    }
+                  },
+                  onHoldAndAccept: () async {
+                    final waitingId =
+                        MultiCallCoordinator.instance.waitingCallId;
+                    if (waitingId != null) {
+                      await MultiCallCoordinator.instance.holdAndAccept(
+                        waitingId,
+                      );
+                    }
+                  },
+                ),
+
+              // Multi-Call Held Bar
+              if (MultiCallCoordinator.instance.hasHeldCall)
+                HeldCallBar(
+                  heldContactName: 'Other Call',
+                  isLoading:
+                      MultiCallCoordinator.instance.isTransitionInFlight,
+                  onSwitch: () async {
+                    await MultiCallCoordinator.instance.switchCalls();
+                  },
+                ),
 
               Expanded(
                 child: LayoutBuilder(
@@ -611,16 +721,23 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                                   ValueListenableBuilder<Duration>(
                                     valueListenable: _durationNotifier,
                                     builder: (context, duration, _) {
+                                      final isRemoteHeld =
+                                          MultiCallCoordinator.instance
+                                              .isCallHeldByRemote(
+                                                widget.callId,
+                                              );
                                       return Text(
                                         _loading
                                             ? 'Connecting…'
-                                            : (_held
-                                                  ? 'Call on hold'
-                                                  : (!_isConnected
-                                                        ? _callStatusText
-                                                        : _formatTimer(
-                                                            duration,
-                                                          ))),
+                                            : (isRemoteHeld
+                                                  ? 'You are on hold'
+                                                  : (_held
+                                                        ? 'Call on hold'
+                                                        : (!_isConnected
+                                                              ? _callStatusText
+                                                              : _formatTimer(
+                                                                  duration,
+                                                                )))),
                                         style: const TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.w600,
@@ -646,7 +763,12 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
 
                               // Restrained Acoustic Waveform
                               CallWaveform(
-                                isActive: !_held && !_muted && !_loading,
+                                isActive:
+                                    !_held &&
+                                    !_muted &&
+                                    !_loading &&
+                                    !MultiCallCoordinator.instance
+                                        .isCallHeldByRemote(widget.callId),
                                 color: const Color(0xFFA78BFA),
                               ),
 

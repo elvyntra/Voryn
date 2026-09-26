@@ -77,11 +77,11 @@ class VorynCallRuntimeCoordinator {
   bool get isEnded => _isEnded;
   bool get routeExitIssued => _routeExitIssued;
 
-  void Function(String status)? _onStatusChanged;
+  Function? _onStatusChanged;
   FutureOr<void> Function()? _onRouteExit;
 
   void attachScreen({
-    required void Function(String status) onStatusChanged,
+    required Function onStatusChanged,
     required FutureOr<void> Function() onRouteExit,
   }) {
     _onStatusChanged = onStatusChanged;
@@ -131,10 +131,28 @@ class VorynCallRuntimeCoordinator {
   void _ensureSubscription() {
     if (_subscription != null || _isEnded || _isTearingDown) return;
     _subscription = const VorynCallService().subscribeToCallState(callId, (
-      status,
-    ) {
-      debugPrint('[CALL $callId] [COORDINATOR] realtime status: $status');
-      _onStatusChanged?.call(status);
+      status, [
+      heldBy,
+    ]) {
+      debugPrint('[CALL $callId] [COORDINATOR] realtime status: $status heldBy: $heldBy');
+      final cb = _onStatusChanged;
+      if (cb != null) {
+        if (cb is void Function(String, [String?])) {
+          cb(status, heldBy);
+        } else if (cb is void Function(String, String?)) {
+          cb(status, heldBy);
+        } else if (cb is void Function(String)) {
+          cb(status);
+        } else {
+          try {
+            (cb as dynamic)(status, heldBy);
+          } catch (_) {
+            try {
+              (cb as dynamic)(status);
+            } catch (_) {}
+          }
+        }
+      }
       if ([
         'completed',
         'cancelled',

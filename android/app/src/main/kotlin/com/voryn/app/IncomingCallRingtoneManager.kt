@@ -61,6 +61,41 @@ object IncomingCallRingtoneManager {
     }
 
     @Synchronized
+    fun playCallWaitingTone(context: Context) {
+        Log.d(TAG, "[RINGTONE] playCallWaitingTone")
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (audioManager.ringerMode != AudioManager.RINGER_MODE_SILENT) {
+                // Subtle dual-pulse vibration
+                val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                    vm.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    v.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 150, 100, 150), -1))
+                } else {
+                    @Suppress("DEPRECATION")
+                    v.vibrate(longArrayOf(0, 150, 100, 150), -1)
+                }
+            }
+
+            // Discreet telephony call-waiting tone (tuned volume 60 out of 100)
+            val tg = android.media.ToneGenerator(AudioManager.STREAM_VOICE_CALL, 60)
+            tg.startTone(android.media.ToneGenerator.TONE_SUP_CALL_WAITING, 250)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    tg.release()
+                } catch (_: Exception) {}
+            }, 600)
+        } catch (e: Exception) {
+            Log.e(TAG, "[RINGTONE] error playing call waiting tone: ${e.message}")
+        }
+    }
+
+    @Synchronized
     fun stop(reason: String, callId: String? = null) {
         if (callId != null && activeCallId != null && callId != activeCallId) {
             return

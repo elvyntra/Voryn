@@ -27,16 +27,19 @@ class VorynCallPlatformBridge(
         private const val TAG = "VorynCall"
         private val mainHandler = Handler(Looper.getMainLooper())
 
+        private fun getTargetBridge(): VorynCallPlatformBridge? {
+            return VorynCallActivity.activeInstance?.bridge ?: MainActivity.activeInstance?.bridge
+        }
+
         fun notifyCallDeclined(callId: String) {
             mainHandler.post {
-                MainActivity.activeInstance?.bridge?.methodChannel?.invokeMethod("onCallDeclined", mapOf("callId" to callId))
-                VorynCallActivity.activeInstance?.bridge?.methodChannel?.invokeMethod("onCallDeclined", mapOf("callId" to callId))
+                getTargetBridge()?.methodChannel?.invokeMethod("onCallDeclined", mapOf("callId" to callId))
             }
         }
 
         fun notifyIncomingCall(callId: String, callerName: String, callType: String) {
             mainHandler.post {
-                MainActivity.activeInstance?.bridge?.methodChannel?.invokeMethod(
+                getTargetBridge()?.methodChannel?.invokeMethod(
                     "onIncomingCall",
                     mapOf(
                         "callId" to callId,
@@ -47,9 +50,35 @@ class VorynCallPlatformBridge(
             }
         }
 
+        fun notifyCallWaiting(callId: String, callerName: String, callType: String) {
+            mainHandler.post {
+                val bridge = getTargetBridge()
+                Log.d(TAG, "[CALL_WAITING] dispatch to bridge: $bridge callId=$callId")
+                bridge?.methodChannel?.invokeMethod(
+                    "onCallWaiting",
+                    mapOf(
+                        "callId" to callId,
+                        "callerName" to callerName,
+                        "callType" to callType
+                    )
+                )
+            }
+        }
+
+        fun notifyCallWaitingCancelled(callId: String) {
+            mainHandler.post {
+                val bridge = getTargetBridge()
+                Log.d(TAG, "[CALL_WAITING] dispatch cancellation to bridge: $bridge callId=$callId")
+                bridge?.methodChannel?.invokeMethod(
+                    "onCallWaitingCancelled",
+                    mapOf("callId" to callId)
+                )
+            }
+        }
+
         fun notifyActiveCallStateChanged(snapshot: Map<String, Any>?) {
             mainHandler.post {
-                MainActivity.activeInstance?.bridge?.methodChannel?.invokeMethod(
+                getTargetBridge()?.methodChannel?.invokeMethod(
                     "onActiveCallStateChanged",
                     snapshot
                 )
@@ -58,13 +87,20 @@ class VorynCallPlatformBridge(
 
         fun notifyCallTerminal(callId: String, type: String) {
             mainHandler.post {
+                val actContext = VorynCallActivity.activeInstance ?: MainActivity.activeInstance
+                val multi = actContext?.let { VorynCallStateManager.getMultiCallState(it) }
+
                 MainActivity.activeInstance?.let { act ->
                     VorynCallStateManager.transition(act, callId, VorynCallStateManager.CallState.TERMINAL)
-                    VorynActiveCallService.stop(act, callId, type)
+                    if (multi == null || multi.heldCallId == null || multi.heldCallId == callId) {
+                        VorynActiveCallService.stop(act, callId, type)
+                    }
                 }
                 VorynCallActivity.activeInstance?.let { act ->
                     VorynCallStateManager.transition(act, callId, VorynCallStateManager.CallState.TERMINAL)
-                    VorynActiveCallService.stop(act, callId, type)
+                    if (multi == null || multi.heldCallId == null || multi.heldCallId == callId) {
+                        VorynActiveCallService.stop(act, callId, type)
+                    }
                 }
                 VorynCallEngineManager.requestTerminal(callId)
                 MainActivity.activeInstance?.bridge?.methodChannel?.invokeMethod(
@@ -81,10 +117,12 @@ class VorynCallPlatformBridge(
                         "type" to type
                     )
                 )
-                MainActivity.activeInstance?.bridge?.methodChannel?.invokeMethod(
-                    "onActiveCallStateChanged",
-                    null
-                )
+                if (multi == null || multi.heldCallId == null || multi.heldCallId == callId) {
+                    MainActivity.activeInstance?.bridge?.methodChannel?.invokeMethod(
+                        "onActiveCallStateChanged",
+                        null
+                    )
+                }
             }
         }
     }
@@ -365,6 +403,73 @@ class VorynCallPlatformBridge(
                     val callId = call.argument<String>("callId")
                     IncomingCallRingtoneManager.stop(reason, if (callId.isNullOrBlank()) null else callId)
                     result.success(true)
+                }
+                "markCallHeldAndAccepted" -> {
+                    val heldCallId = call.argument<String>("heldCallId") ?: ""
+                    val activeCallId = call.argument<String>("activeCallId") ?: ""
+                    val callerName = call.argument<String>("callerName") ?: "Voryn User"
+                    val callType = call.argument<String>("callType") ?: "audio"
+                    if (heldCallId.isNotBlank() && activeCallId.isNotBlank()) {
+                        VorynCallStateManager.holdActiveAndAcceptWaiting(activity, heldCallId, activeCallId, callerName, callType)
+                        IncomingCallNotificationManager.cancelWaitingCallNotification(activity, activeCallId)
+                        VorynActiveCallService.start(activity, activeCallId, callerName, callType)
+                        val snapshot = VorynCallStateManager.getActiveCallSnapshot(activity)
+                        notifyActiveCallStateChanged(snapshot)
+                    }
+                    result.success(true)
+                }
+                "markCallSwapped" -> {
+                    val activeCallId = call.argument<String>("activeCallId") ?: ""
+                    val heldCallId = call.argument<String>("heldCallId") ?: ""
+                    if (activeCallId.isNotBlank() && heldCallId.isNotBlank()) {
+                        VorynCallStateManager.switchCalls(activity, activeCallId, heldCallId)
+                        val callerName = VorynCallStateManager.getCallerName(activity)
+                        val callType = VorynCallStateManager.getCallType(activity)
+                        VorynActiveCallService.start(activity, activeCallId, callerName, callType)
+                        val snapshot = VorynCallStateManager.getActiveCallSnapshot(activity)
+                        notifyActiveCallStateChanged(snapshot)
+                    }
+                    result.success(true)
+                }
+                "resumeHeldCall" -> {
+                    val callId = call.argument<String>("callId") ?: ""
+                    if (callId.isNotBlank()) {
+                        VorynCallStateManager.resumeHeldCall(activity, callId)
+                        val callerName = VorynCallStateManager.getCallerName(activity)
+                        val callType = VorynCallStateManager.getCallType(activity)
+                        VorynActiveCallService.start(activity, callId, callerName, callType)
+                        val snapshot = VorynCallStateManager.getActiveCallSnapshot(activity)
+                        notifyActiveCallStateChanged(snapshot)
+                    }
+                    result.success(true)
+                }
+                "clearHeldCall" -> {
+                    val callId = call.argument<String>("callId") ?: ""
+                    if (callId.isNotBlank()) {
+                        VorynCallStateManager.clearHeldCall(activity, callId)
+                        val snapshot = VorynCallStateManager.getActiveCallSnapshot(activity)
+                        notifyActiveCallStateChanged(snapshot)
+                    }
+                    result.success(true)
+                }
+                "clearWaitingCall" -> {
+                    val callId = call.argument<String>("callId") ?: ""
+                    if (callId.isNotBlank()) {
+                        VorynCallStateManager.clearWaitingCall(activity, callId)
+                        IncomingCallNotificationManager.cancelWaitingCallNotification(activity, callId)
+                    }
+                    result.success(true)
+                }
+                "getMultiCallState" -> {
+                    val s = VorynCallStateManager.getMultiCallState(activity)
+                    result.success(
+                        mapOf(
+                            "activeCallId" to (s.activeCallId ?: ""),
+                            "heldCallId" to (s.heldCallId ?: ""),
+                            "waitingCallId" to (s.waitingCallId ?: ""),
+                            "activeCallState" to s.activeCallState.name
+                        )
+                    )
                 }
                 else -> result.notImplemented()
             }

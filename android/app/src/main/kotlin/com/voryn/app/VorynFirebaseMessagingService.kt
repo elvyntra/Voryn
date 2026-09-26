@@ -24,6 +24,30 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
         when (type) {
             "incoming_call" -> {
                 if (callId.isBlank()) return
+
+                // Check if user is already in an active or held call
+                if (VorynCallStateManager.hasActiveOrHeldCall(this)) {
+                    val multiState = VorynCallStateManager.getMultiCallState(this)
+                    if (multiState.activeCallId == callId || multiState.heldCallId == callId) {
+                        Log.d("VorynCall", "[FCM_NATIVE] duplicate incoming push for current callId=$callId ignored")
+                        return
+                    }
+                    if (multiState.activeCallId != null && multiState.heldCallId != null) {
+                        Log.w("VorynCall", "[FCM_NATIVE] 3rd call arrived while active (${multiState.activeCallId}) and held (${multiState.heldCallId}) calls exist: capacity full, ignoring callId=$callId")
+                        return
+                    }
+
+                    val callType = data["call_type"] ?: data["callType"] ?: "audio"
+                    val callerName = data["caller_name"] ?: data["callerName"] ?: "Voryn User"
+
+                    Log.d("VorynCall", "[FCM_NATIVE] incoming call waiting: callId=$callId activeCallId=${multiState.activeCallId}")
+                    VorynCallStateManager.recordWaitingCall(this, callId, callType, callerName)
+                    IncomingCallRingtoneManager.playCallWaitingTone(this)
+                    IncomingCallNotificationManager.showWaitingCall(this, callId, callerName, callType)
+                    VorynCallPlatformBridge.notifyCallWaiting(callId, callerName, callType)
+                    return
+                }
+
                 val existingPending = IncomingCallNotificationManager.getPendingIncomingCall(this)
                 val existingCallId = existingPending?.get("callId") as? String
                 val existingState = existingPending?.get("state") as? String
@@ -87,10 +111,19 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
             "cancel_call", "call_cancelled", "call_ended", "call_completed", "call_declined", "call_missed" -> {
                 if (callId.isBlank()) return
                 Log.d("VorynCall", "[FCM_NATIVE] terminal push received type=$type callId=$callId")
+                val multiState = VorynCallStateManager.getMultiCallState(this)
+                if (multiState.waitingCallId == callId) {
+                    Log.d("VorynCall", "[FCM_NATIVE] waiting call cancelled callId=$callId")
+                    VorynCallStateManager.clearWaitingCall(this, callId)
+                    IncomingCallNotificationManager.cancelWaitingCallNotification(this, callId)
+                    VorynCallPlatformBridge.notifyCallWaitingCancelled(callId)
+                    return
+                }
+
                 IncomingCallNotificationManager.cancelIncomingCall(this, callId, "remote_terminal")
                 IncomingCallActivity.dismiss()
 
-                MainActivity.notifyCallTerminal(callId, type)
+                VorynCallPlatformBridge.notifyCallTerminal(callId, type)
             }
             "call_message" -> {
                 val messageId = data["message_id"] ?: data["id"] ?: ""

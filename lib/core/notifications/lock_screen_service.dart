@@ -126,6 +126,8 @@ class LockScreenService {
     void Function(Map<String, String> data)? onIncoming,
     void Function(String callId, String type)? onTerminal,
     void Function(Map<String, dynamic>? snapshot)? onActiveCallStateChanged,
+    void Function(Map<String, String> data)? onCallWaiting,
+    void Function(String callId)? onCallWaitingCancelled,
   }) {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onCallLaunchIntent') {
@@ -149,6 +151,20 @@ class LockScreenService {
             (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
           );
           onIncoming?.call(data);
+        }
+      } else if (call.method == 'onCallWaiting') {
+        final arguments = call.arguments;
+        if (arguments is Map) {
+          final data = arguments.map(
+            (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+          );
+          onCallWaiting?.call(data);
+        }
+      } else if (call.method == 'onCallWaitingCancelled') {
+        final arguments = call.arguments;
+        if (arguments is Map) {
+          final callId = arguments['callId']?.toString() ?? '';
+          onCallWaitingCancelled?.call(callId);
         }
       } else if (call.method == 'onCallTerminal') {
         final arguments = call.arguments;
@@ -362,5 +378,71 @@ class LockScreenService {
         'callId': callId,
       });
     } catch (_) {}
+  }
+
+  /// Marks the current active call as held and transitions the waiting call to active.
+  static Future<void> markCallHeldAndAccepted({
+    required String heldCallId,
+    required String activeCallId,
+    String? callerName,
+    String? callType,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('markCallHeldAndAccepted', {
+        'heldCallId': heldCallId,
+        'activeCallId': activeCallId,
+        'callerName': callerName,
+        'callType': callType,
+      });
+    } catch (_) {}
+  }
+
+  /// Swaps roles between the active call and held call in native state.
+  static Future<void> markCallSwapped({
+    required String newActiveCallId,
+    required String newHeldCallId,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('markCallSwapped', {
+        'activeCallId': newActiveCallId,
+        'heldCallId': newHeldCallId,
+      });
+    } catch (_) {}
+  }
+
+  /// Resumes the held call and promotes it to active in native state.
+  static Future<void> resumeHeldCall(String callId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('resumeHeldCall', {'callId': callId});
+    } catch (_) {}
+  }
+
+  /// Clears the held call from native state when ended.
+  static Future<void> clearHeldCall(String callId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('clearHeldCall', {'callId': callId});
+    } catch (_) {}
+  }
+
+  /// Clears waiting call record and cancels waiting notification.
+  static Future<void> clearWaitingCall(String callId) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('clearWaitingCall', {'callId': callId});
+    } catch (_) {}
+  }
+
+  /// Retrieves multi-call state snapshot from native state manager.
+  static Future<Map<String, dynamic>?> getMultiCallState() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+    try {
+      return await _channel.invokeMapMethod<String, dynamic>('getMultiCallState');
+    } catch (_) {
+      return null;
+    }
   }
 }

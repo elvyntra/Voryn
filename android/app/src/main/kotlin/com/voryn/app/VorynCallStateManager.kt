@@ -7,7 +7,11 @@ object VorynCallStateManager {
     private const val TAG = "VorynCall"
     private const val PREFS_NAME = "voryn_call_state_v1"
 
-    private const val KEY_CALL_ID = "call_id"
+    private const val KEY_ACTIVE_CALL_ID = "active_call_id"
+    private const val KEY_HELD_CALL_ID = "held_call_id"
+    private const val KEY_WAITING_CALL_ID = "waiting_call_id"
+
+    private const val KEY_CALL_ID = "call_id" // legacy mirror of active call
     private const val KEY_CALL_STATE = "call_state"
     private const val KEY_CALL_TYPE = "call_type"
     private const val KEY_CALLER_NAME = "caller_name"
@@ -17,11 +21,18 @@ object VorynCallStateManager {
     private const val KEY_PRESENTATION_STATE = "presentation_state"
     private const val KEY_CALL_ORIGIN = "call_origin"
 
+    private const val KEY_HELD_CALLER_NAME = "held_caller_name"
+    private const val KEY_HELD_CALL_TYPE = "held_call_type"
+    private const val KEY_WAITING_CALLER_NAME = "waiting_caller_name"
+    private const val KEY_WAITING_CALL_TYPE = "waiting_call_type"
+    private const val KEY_WAITING_RECEIVED_AT = "waiting_received_at"
+
     enum class CallState {
         NONE,
         RINGING,
         ACCEPTING,
         ACTIVE,
+        HELD,
         ENDING,
         TERMINAL
     }
@@ -30,6 +41,13 @@ object VorynCallStateManager {
         FULLSCREEN,
         MINIMIZED
     }
+
+    data class MultiCallState(
+        val activeCallId: String? = null,
+        val heldCallId: String? = null,
+        val waitingCallId: String? = null,
+        val activeCallState: CallState = CallState.NONE
+    )
 
     @Volatile
     private var inMemoryState: CallState = CallState.NONE
@@ -41,27 +59,48 @@ object VorynCallStateManager {
     private var inMemoryOrigin: VorynCallHostManager.CallPresentationOrigin? = null
 
     @Volatile
-    private var inMemoryCallId: String? = null
+    private var inMemoryMultiCallState = MultiCallState()
+
+    @Synchronized
+    fun getMultiCallState(context: Context): MultiCallState {
+        if (inMemoryMultiCallState.activeCallId != null || inMemoryMultiCallState.heldCallId != null || inMemoryMultiCallState.waitingCallId != null) {
+            return inMemoryMultiCallState
+        }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val activeId = prefs.getString(KEY_ACTIVE_CALL_ID, null) ?: prefs.getString(KEY_CALL_ID, null)
+        val heldId = prefs.getString(KEY_HELD_CALL_ID, null)
+        val waitingId = prefs.getString(KEY_WAITING_CALL_ID, null)
+        val stateStr = prefs.getString(KEY_CALL_STATE, null)
+        val st = if (stateStr != null) {
+            try { CallState.valueOf(stateStr) } catch (_: Exception) { CallState.NONE }
+        } else CallState.NONE
+
+        inMemoryMultiCallState = MultiCallState(
+            activeCallId = activeId,
+            heldCallId = heldId,
+            waitingCallId = waitingId,
+            activeCallState = st
+        )
+        return inMemoryMultiCallState
+    }
+
+    @Synchronized
+    fun hasActiveOrHeldCall(context: Context): Boolean {
+        val s = getMultiCallState(context)
+        return (s.activeCallId != null && (s.activeCallState == CallState.ACTIVE || s.activeCallState == CallState.ACCEPTING)) ||
+            (s.heldCallId != null)
+    }
 
     @Synchronized
     fun getCurrentState(context: Context): CallState {
-        if (inMemoryState != CallState.NONE) return inMemoryState
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val stateStr = prefs.getString(KEY_CALL_STATE, null) ?: return CallState.NONE
-        inMemoryState = try {
-            CallState.valueOf(stateStr)
-        } catch (_: Exception) {
-            CallState.NONE
-        }
-        return inMemoryState
+        val s = getMultiCallState(context)
+        return s.activeCallState
     }
 
     @Synchronized
     fun getCurrentCallId(context: Context): String? {
-        if (!inMemoryCallId.isNullOrBlank()) return inMemoryCallId
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        inMemoryCallId = prefs.getString(KEY_CALL_ID, null)
-        return inMemoryCallId
+        val s = getMultiCallState(context)
+        return s.activeCallId
     }
 
     @Synchronized
@@ -71,26 +110,197 @@ object VorynCallStateManager {
         callType: String,
         callerName: String
     ) {
-        val current = getCurrentState(context)
-        val activeId = getCurrentCallId(context)
-        if (activeId == callId && (current == CallState.ACCEPTING || current == CallState.ACTIVE)) {
-            Log.d(TAG, "[CALL_STATE] duplicate incoming ignored callId=$callId state=$current")
+        val s = getMultiCallState(context)
+        if (s.activeCallId == callId && (s.activeCallState == CallState.ACCEPTING || s.activeCallState == CallState.ACTIVE)) {
+            Log.d(TAG, "[CALL_STATE] duplicate incoming ignored callId=$callId state=${s.activeCallState}")
             return
         }
 
+        // If an active call exists, record as waiting call instead of clobbering active call
+        if (hasActiveOrHeldCall(context)) {
+            recordWaitingCall(context, callId, callType, callerName)
+            return
+        }
+
+        inMemoryMultiCallState = inMemoryMultiCallState.copy(
+            activeCallId = callId,
+            activeCallState = CallState.RINGING
+        )
         inMemoryState = CallState.RINGING
-        inMemoryCallId = callId
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_CALL_ID, callId)
+            .putString(KEY_ACTIVE_CALL_ID, callId)
             .putString(KEY_CALL_STATE, CallState.RINGING.name)
             .putString(KEY_CALL_TYPE, callType)
             .putString(KEY_CALLER_NAME, callerName)
             .putLong(KEY_RECEIVED_AT, System.currentTimeMillis())
             .apply()
 
-        Log.d(TAG, "[CALL_STATE] RINGING callId=$callId")
+        Log.d(TAG, "[CALL_STATE] RINGING activeCallId=$callId")
+    }
+
+    @Synchronized
+    fun recordWaitingCall(
+        context: Context,
+        callId: String,
+        callType: String,
+        callerName: String
+    ) {
+        val s = getMultiCallState(context)
+        // Capacity check: Max 2 calls (1 active + 1 waiting/held)
+        if (s.activeCallId != null && s.heldCallId != null) {
+            Log.w(TAG, "[CALL_WAITING] rejected 3rd incoming call $callId: capacity full")
+            return
+        }
+
+        inMemoryMultiCallState = inMemoryMultiCallState.copy(waitingCallId = callId)
+
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_WAITING_CALL_ID, callId)
+            .putString(KEY_WAITING_CALL_TYPE, callType)
+            .putString(KEY_WAITING_CALLER_NAME, callerName)
+            .putLong(KEY_WAITING_RECEIVED_AT, System.currentTimeMillis())
+            .apply()
+
+        Log.d(TAG, "[CALL_STATE] WAITING callId=$callId activeCallId=${s.activeCallId} heldCallId=${s.heldCallId}")
+    }
+
+    @Synchronized
+    fun holdActiveAndAcceptWaiting(
+        context: Context,
+        heldCallId: String,
+        activeCallId: String,
+        callerName: String? = null,
+        callType: String? = null
+    ) {
+        val current = getMultiCallState(context)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val oldActiveName = prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"
+        val oldActiveType = prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"
+
+        inMemoryMultiCallState = MultiCallState(
+            activeCallId = activeCallId,
+            heldCallId = heldCallId,
+            waitingCallId = null,
+            activeCallState = CallState.ACTIVE
+        )
+        inMemoryState = CallState.ACTIVE
+
+        prefs.edit()
+            .putString(KEY_ACTIVE_CALL_ID, activeCallId)
+            .putString(KEY_CALL_ID, activeCallId)
+            .putString(KEY_CALL_STATE, CallState.ACTIVE.name)
+            .putString(KEY_CALLER_NAME, callerName ?: "Voryn User")
+            .putString(KEY_CALL_TYPE, callType ?: "audio")
+            .putString(KEY_HELD_CALL_ID, heldCallId)
+            .putString(KEY_HELD_CALLER_NAME, oldActiveName)
+            .putString(KEY_HELD_CALL_TYPE, oldActiveType)
+            .remove(KEY_WAITING_CALL_ID)
+            .remove(KEY_WAITING_CALLER_NAME)
+            .remove(KEY_WAITING_CALL_TYPE)
+            .remove(KEY_WAITING_RECEIVED_AT)
+            .apply()
+
+        VorynCallHostManager.updateState(heldCallId, CallState.HELD)
+        VorynCallHostManager.updateState(activeCallId, CallState.ACTIVE)
+        Log.d(TAG, "[CALL_STATE] holdActiveAndAcceptWaiting active=$activeCallId held=$heldCallId")
+    }
+
+    @Synchronized
+    fun switchCalls(
+        context: Context,
+        newActiveCallId: String,
+        newHeldCallId: String
+    ) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val activeName = prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"
+        val activeType = prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"
+        val heldName = prefs.getString(KEY_HELD_CALLER_NAME, "Voryn User") ?: "Voryn User"
+        val heldType = prefs.getString(KEY_HELD_CALL_TYPE, "audio") ?: "audio"
+
+        inMemoryMultiCallState = inMemoryMultiCallState.copy(
+            activeCallId = newActiveCallId,
+            heldCallId = newHeldCallId,
+            activeCallState = CallState.ACTIVE
+        )
+        inMemoryState = CallState.ACTIVE
+
+        prefs.edit()
+            .putString(KEY_ACTIVE_CALL_ID, newActiveCallId)
+            .putString(KEY_CALL_ID, newActiveCallId)
+            .putString(KEY_CALLER_NAME, heldName)
+            .putString(KEY_CALL_TYPE, heldType)
+            .putString(KEY_HELD_CALL_ID, newHeldCallId)
+            .putString(KEY_HELD_CALLER_NAME, activeName)
+            .putString(KEY_HELD_CALL_TYPE, activeType)
+            .apply()
+
+        VorynCallHostManager.updateState(newHeldCallId, CallState.HELD)
+        VorynCallHostManager.updateState(newActiveCallId, CallState.ACTIVE)
+        Log.d(TAG, "[CALL_STATE] switchCalls active=$newActiveCallId held=$newHeldCallId")
+    }
+
+    @Synchronized
+    fun resumeHeldCall(context: Context, resumedCallId: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val heldName = prefs.getString(KEY_HELD_CALLER_NAME, "Voryn User") ?: "Voryn User"
+        val heldType = prefs.getString(KEY_HELD_CALL_TYPE, "audio") ?: "audio"
+
+        inMemoryMultiCallState = MultiCallState(
+            activeCallId = resumedCallId,
+            heldCallId = null,
+            waitingCallId = inMemoryMultiCallState.waitingCallId,
+            activeCallState = CallState.ACTIVE
+        )
+        inMemoryState = CallState.ACTIVE
+
+        prefs.edit()
+            .putString(KEY_ACTIVE_CALL_ID, resumedCallId)
+            .putString(KEY_CALL_ID, resumedCallId)
+            .putString(KEY_CALLER_NAME, heldName)
+            .putString(KEY_CALL_TYPE, heldType)
+            .remove(KEY_HELD_CALL_ID)
+            .remove(KEY_HELD_CALLER_NAME)
+            .remove(KEY_HELD_CALL_TYPE)
+            .apply()
+
+        VorynCallHostManager.updateState(resumedCallId, CallState.ACTIVE)
+        Log.d(TAG, "[CALL_STATE] resumeHeldCall active=$resumedCallId held=null")
+    }
+
+    @Synchronized
+    fun clearHeldCall(context: Context, heldCallId: String) {
+        val s = getMultiCallState(context)
+        if (s.heldCallId == heldCallId) {
+            inMemoryMultiCallState = inMemoryMultiCallState.copy(heldCallId = null)
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit()
+                .remove(KEY_HELD_CALL_ID)
+                .remove(KEY_HELD_CALLER_NAME)
+                .remove(KEY_HELD_CALL_TYPE)
+                .apply()
+            VorynCallHostManager.releaseCall(heldCallId, VorynCallHostManager.getActiveHost())
+            Log.d(TAG, "[CALL_STATE] clearHeldCall callId=$heldCallId")
+        }
+    }
+
+    @Synchronized
+    fun clearWaitingCall(context: Context, callId: String) {
+        val s = getMultiCallState(context)
+        if (s.waitingCallId == callId) {
+            inMemoryMultiCallState = inMemoryMultiCallState.copy(waitingCallId = null)
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit()
+                .remove(KEY_WAITING_CALL_ID)
+                .remove(KEY_WAITING_CALLER_NAME)
+                .remove(KEY_WAITING_CALL_TYPE)
+                .remove(KEY_WAITING_RECEIVED_AT)
+                .apply()
+            Log.d(TAG, "[CALL_STATE] clearWaitingCall callId=$callId")
+        }
     }
 
     @Synchronized
@@ -104,11 +314,15 @@ object VorynCallStateManager {
 
         val oldState = current
         inMemoryState = CallState.ACCEPTING
-        inMemoryCallId = callId
+        inMemoryMultiCallState = inMemoryMultiCallState.copy(
+            activeCallId = callId,
+            activeCallState = CallState.ACCEPTING
+        )
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_CALL_ID, callId)
+            .putString(KEY_ACTIVE_CALL_ID, callId)
             .putString(KEY_CALL_STATE, CallState.ACCEPTING.name)
             .apply()
 
@@ -129,7 +343,10 @@ object VorynCallStateManager {
     ) {
         inMemoryState = CallState.ACTIVE
         inMemoryPresentation = PresentationState.FULLSCREEN
-        inMemoryCallId = callId
+        inMemoryMultiCallState = inMemoryMultiCallState.copy(
+            activeCallId = callId,
+            activeCallState = CallState.ACTIVE
+        )
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val existingOriginStr = prefs.getString(KEY_CALL_ORIGIN, null)
@@ -150,6 +367,7 @@ object VorynCallStateManager {
 
         val editor = prefs.edit()
             .putString(KEY_CALL_ID, callId)
+            .putString(KEY_ACTIVE_CALL_ID, callId)
             .putString(KEY_CALL_STATE, CallState.ACTIVE.name)
             .putString(KEY_PRESENTATION_STATE, PresentationState.FULLSCREEN.name)
             .putString(KEY_CALLER_NAME, callerName)
@@ -220,64 +438,92 @@ object VorynCallStateManager {
 
     @Synchronized
     fun getActiveCallSnapshot(context: Context): Map<String, Any>? {
-        val state = getCurrentState(context)
-        if (state != CallState.ACTIVE && state != CallState.ACCEPTING) {
+        val s = getMultiCallState(context)
+        if (s.activeCallState != CallState.ACTIVE && s.activeCallState != CallState.ACCEPTING) {
             return null
         }
-        val callId = getCurrentCallId(context) ?: return null
+        val callId = s.activeCallId ?: return null
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val presentation = getPresentationState(context)
         val origin = getCallOrigin(context)
         val host = prefs.getString(KEY_HOST, null) ?: VorynCallHostManager.getActiveHost().name
         return mapOf(
             "callId" to callId,
-            "state" to state.name,
+            "state" to s.activeCallState.name,
             "presentation" to presentation.name,
             "origin" to origin.name,
             "host" to host,
             "callType" to (prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"),
             "displayName" to (prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"),
-            "startedAt" to prefs.getLong(KEY_STARTED_AT, 0L)
+            "startedAt" to prefs.getLong(KEY_STARTED_AT, 0L),
+            "heldCallId" to (s.heldCallId ?: ""),
+            "heldCallerName" to (prefs.getString(KEY_HELD_CALLER_NAME, "") ?: "")
         )
     }
 
     @Synchronized
     fun transition(context: Context, callId: String, newState: CallState) {
-        val oldState = inMemoryState
-        inMemoryState = newState
-        if (newState == CallState.TERMINAL || newState == CallState.NONE) {
-            inMemoryCallId = null
-            inMemoryPresentation = PresentationState.FULLSCREEN
-            inMemoryOrigin = null
-            VorynCallHostManager.releaseCall(callId, VorynCallHostManager.getActiveHost())
-        } else {
-            inMemoryCallId = callId
-            VorynCallHostManager.updateState(callId, newState)
+        val s = getMultiCallState(context)
+
+        // If held call transitioned to terminal
+        if (s.heldCallId == callId) {
+            if (newState == CallState.TERMINAL || newState == CallState.NONE) {
+                clearHeldCall(context, callId)
+            }
+            return
         }
 
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (newState == CallState.TERMINAL || newState == CallState.NONE) {
-            prefs.edit().clear().apply()
+        // If waiting call transitioned to terminal
+        if (s.waitingCallId == callId) {
+            if (newState == CallState.TERMINAL || newState == CallState.NONE) {
+                clearWaitingCall(context, callId)
+            }
+            return
+        }
+
+        // Active call transitioned
+        inMemoryState = newState
+        val isTerminal = (newState == CallState.TERMINAL || newState == CallState.NONE)
+
+        if (isTerminal) {
+            VorynCallHostManager.releaseCall(callId, VorynCallHostManager.getActiveHost())
+            // If a held call exists, promote it to active!
+            if (s.heldCallId != null) {
+                resumeHeldCall(context, s.heldCallId)
+                return
+            } else {
+                inMemoryMultiCallState = MultiCallState()
+                inMemoryPresentation = PresentationState.FULLSCREEN
+                inMemoryOrigin = null
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().clear().apply()
+            }
         } else {
+            inMemoryMultiCallState = inMemoryMultiCallState.copy(
+                activeCallId = callId,
+                activeCallState = newState
+            )
+            VorynCallHostManager.updateState(callId, newState)
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs.edit()
                 .putString(KEY_CALL_ID, callId)
+                .putString(KEY_ACTIVE_CALL_ID, callId)
                 .putString(KEY_CALL_STATE, newState.name)
                 .apply()
         }
 
-        Log.d(TAG, "[CALL_STATE] $newState callId=$callId")
+        Log.d(TAG, "[CALL_STATE] $newState callId=$callId (active=${inMemoryMultiCallState.activeCallId}, held=${inMemoryMultiCallState.heldCallId})")
     }
 
     @Synchronized
     fun getPendingIncomingCall(context: Context): Map<String, Any>? {
-        val state = getCurrentState(context)
-        // MUST return only when strictly RINGING
-        if (state != CallState.RINGING) {
+        val s = getMultiCallState(context)
+        if (s.activeCallState != CallState.RINGING) {
             return null
         }
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        val callId = s.activeCallId ?: return null
         val receivedAt = prefs.getLong(KEY_RECEIVED_AT, 0L)
         val now = System.currentTimeMillis()
         if (receivedAt > 0L && (now - receivedAt) > 60000L) {
@@ -294,35 +540,64 @@ object VorynCallStateManager {
     }
 
     @Synchronized
+    fun getWaitingCall(context: Context): Map<String, Any>? {
+        val s = getMultiCallState(context)
+        val waitingId = s.waitingCallId ?: return null
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val receivedAt = prefs.getLong(KEY_WAITING_RECEIVED_AT, 0L)
+        val now = System.currentTimeMillis()
+        if (receivedAt > 0L && (now - receivedAt) > 60000L) {
+            return null
+        }
+
+        return mapOf(
+            "callId" to waitingId,
+            "callType" to (prefs.getString(KEY_WAITING_CALL_TYPE, "audio") ?: "audio"),
+            "callerName" to (prefs.getString(KEY_WAITING_CALLER_NAME, "Voryn User") ?: "Voryn User"),
+            "receivedAt" to receivedAt
+        )
+    }
+
+    @Synchronized
     fun getActiveCall(context: Context): Map<String, Any>? {
-        val state = getCurrentState(context)
-        if (state != CallState.ACTIVE && state != CallState.ACCEPTING) {
+        val s = getMultiCallState(context)
+        if (s.activeCallState != CallState.ACTIVE && s.activeCallState != CallState.ACCEPTING) {
             return null
         }
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val callId = prefs.getString(KEY_CALL_ID, null) ?: return null
+        val callId = s.activeCallId ?: return null
         return mapOf(
             "callId" to callId,
             "callType" to (prefs.getString(KEY_CALL_TYPE, "audio") ?: "audio"),
             "callerName" to (prefs.getString(KEY_CALLER_NAME, "Voryn User") ?: "Voryn User"),
             "host" to (prefs.getString(KEY_HOST, "LOCKED_CALL") ?: "LOCKED_CALL"),
             "startedAt" to prefs.getLong(KEY_STARTED_AT, 0L),
-            "state" to state.name
+            "state" to s.activeCallState.name,
+            "heldCallId" to (s.heldCallId ?: "")
         )
     }
 
     @Synchronized
     fun clear(context: Context, callId: String? = null) {
-        val currentId = getCurrentCallId(context)
-        if (callId == null || currentId == callId) {
-            val state = getCurrentState(context)
-            if (state == CallState.ACCEPTING || state == CallState.ACTIVE) {
-                Log.d(TAG, "[CALL_STATE] clear() ignored because callId=$callId is $state")
+        val s = getMultiCallState(context)
+        if (callId != null) {
+            if (s.waitingCallId == callId) {
+                clearWaitingCall(context, callId)
+                return
+            }
+            if (s.heldCallId == callId) {
+                clearHeldCall(context, callId)
+                return
+            }
+        }
+        if (callId == null || s.activeCallId == callId) {
+            if (s.activeCallState == CallState.ACCEPTING || s.activeCallState == CallState.ACTIVE) {
+                Log.d(TAG, "[CALL_STATE] clear() ignored because callId=$callId is ${s.activeCallState}")
                 return
             }
             inMemoryPresentation = PresentationState.FULLSCREEN
-            transition(context, callId ?: currentId ?: "", CallState.TERMINAL)
+            transition(context, callId ?: s.activeCallId ?: "", CallState.TERMINAL)
         }
     }
 }

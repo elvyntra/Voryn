@@ -73,6 +73,11 @@ class VorynActiveCallService : Service() {
         val reason = intent?.getStringExtra("reason") ?: "normal"
 
         if (action == ACTION_STOP_CALL) {
+            val multi = VorynCallStateManager.getMultiCallState(this)
+            if (multi.heldCallId != null && multi.heldCallId != callId) {
+                Log.d(TAG, "[ACTIVE_SERVICE] stop requested for callId=$callId, but held call ${multi.heldCallId} exists. Retaining service.")
+                return START_NOT_STICKY
+            }
             Log.d(TAG, "[ACTIVE_SERVICE] stop reason=$reason callId=$callId")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)

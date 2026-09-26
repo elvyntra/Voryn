@@ -380,13 +380,20 @@ class MainActivity : FlutterActivity() {
         val acceptTimestamp = intent.getLongExtra("accept_timestamp", 0L)
 
         val isCallLaunch = payload.isNotBlank() || actionId == "accept" || actionId == "decline" ||
-            action == "ACCEPT_CALL" || action == "SELECT_NOTIFICATION" || action == "SELECT_FOREGROUND_NOTIFICATION_ACTION"
+            action == "ACCEPT_CALL" || action == "SELECT_NOTIFICATION" || action == "SELECT_FOREGROUND_NOTIFICATION_ACTION" ||
+            action == "com.voryn.app.ACTION_HOLD_AND_ACCEPT_CALL" || actionId == "hold_and_accept"
 
         if (!isCallLaunch) return null
 
+        val resolvedActionId = if (action == "com.voryn.app.ACTION_HOLD_AND_ACCEPT_CALL") {
+            "hold_and_accept"
+        } else {
+            actionId
+        }
+
         return mapOf(
             "callId" to payload,
-            "actionId" to actionId,
+            "actionId" to resolvedActionId,
             "action" to action,
             "callType" to callType,
             "acceptTimestamp" to acceptTimestamp.toString()

@@ -18,6 +18,7 @@ import 'features/calling/active_audio_call_screen.dart';
 import 'features/calling/active_video_call_screen.dart';
 import 'features/calling/group_call_screen.dart';
 import 'features/calling/incoming_call_screen.dart';
+import 'features/calling/multi_call_coordinator.dart';
 import 'features/calling/voryn_active_call_presentation_service.dart';
 import 'features/calling/voryn_call_history_service.dart';
 import 'features/calling/voryn_call_latency_tracker.dart';
@@ -308,7 +309,13 @@ class _VorynCallHostAppState extends State<VorynCallHostApp> {
     super.initState();
     LockScreenService.setCallLaunchListener(
       (data) {
-        debugPrint('[CALL_HOST] onCallLaunchIntent ignored during active call');
+        final actionId = data['actionId'] ?? '';
+        final callId = data['callId'] ?? '';
+        if (actionId == 'hold_and_accept' && callId.isNotEmpty) {
+          unawaited(MultiCallCoordinator.instance.holdAndAccept(callId));
+        } else {
+          debugPrint('[CALL_HOST] onCallLaunchIntent ignored during active call: $data');
+        }
       },
       onDeclined: (callId) {
         debugPrint('[CALL_HOST] onDeclined for callId=$callId');
@@ -316,11 +323,24 @@ class _VorynCallHostAppState extends State<VorynCallHostApp> {
       onIncoming: (data) {
         debugPrint('[CALL_HOST] onIncoming ignored in call host');
       },
+      onCallWaiting: (data) {
+        final callId = data['callId'] ?? '';
+        final callerName = data['callerName'] ?? 'Voryn User';
+        final callType = data['callType'] ?? 'audio';
+        if (callId.isNotEmpty) {
+          MultiCallCoordinator.instance.handleIncomingWaitingCall(
+            callId: callId,
+            callerName: callerName,
+            callType: callType,
+          );
+        }
+      },
+      onCallWaitingCancelled: (callId) {
+        MultiCallCoordinator.instance.dismissWaitingCall(callId);
+      },
       onTerminal: (callId, type) {
         debugPrint('[CALL_HOST] onTerminal for callId=$callId type=$type');
-        VorynCallRuntimeCoordinator.forCall(
-          callId,
-        ).performTeardown(isLocalInitiator: false);
+        MultiCallCoordinator.instance.endCall(callId, isLocalInitiator: false);
       },
     );
   }
@@ -457,15 +477,28 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
           _router.go('/incoming-call/$callId');
         }
       },
+      onCallWaiting: (data) {
+        final callId = data['callId'] ?? '';
+        final callerName = data['callerName'] ?? 'Voryn User';
+        final callType = data['callType'] ?? 'audio';
+        if (callId.isNotEmpty) {
+          MultiCallCoordinator.instance.handleIncomingWaitingCall(
+            callId: callId,
+            callerName: callerName,
+            callType: callType,
+          );
+        }
+      },
+      onCallWaitingCancelled: (callId) {
+        MultiCallCoordinator.instance.dismissWaitingCall(callId);
+      },
       onTerminal: (callId, type) {
         debugPrint(
           '[BOOT] onTerminal from native service for callId=$callId type=$type',
         );
         VorynFirebaseMessaging.clearPendingIncomingCall(callId);
         VorynActiveCallPresentationService.instance.clearSnapshot();
-        VorynCallRuntimeCoordinator.forCall(
-          callId,
-        ).performTeardown(isLocalInitiator: false);
+        MultiCallCoordinator.instance.endCall(callId, isLocalInitiator: false);
       },
       onActiveCallStateChanged: (snapshot) {
         debugPrint(
@@ -638,6 +671,11 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
       debugPrint(
         '[HOST_OWNERSHIP] suppressed warm call launch in MainActivity: callId=$callId owned by other host',
       );
+      return;
+    }
+
+    if (actionId == 'hold_and_accept') {
+      await MultiCallCoordinator.instance.holdAndAccept(callId);
       return;
     }
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart' as livekit;
 
 import '../../core/backend/voryn_backend.dart';
@@ -110,6 +111,92 @@ class VorynLiveKitSession {
     try {
       await room.localParticipant?.setScreenShareEnabled(enabled);
     } catch (_) {}
+  }
+
+  bool _isHeld = false;
+  bool get isHeld => _isHeld;
+
+  /// Holds the session by muting local mic and suppressing remote audio/video tracks.
+  Future<void> hold() async {
+    if (_disposed || _disconnecting || _isHeld) return;
+    _isHeld = true;
+
+    var remoteAudioCount = 0;
+    // 1. Mute local mic
+    try {
+      await room.localParticipant?.setMicrophoneEnabled(false);
+    } catch (_) {}
+
+    // 2. Mute local camera
+    try {
+      await room.localParticipant?.setCameraEnabled(false);
+    } catch (_) {}
+
+    // 3. Silence remote audio & video tracks
+    for (final participant in room.remoteParticipants.values) {
+      for (final pub in participant.audioTrackPublications) {
+        remoteAudioCount++;
+        try {
+          pub.track?.mediaStreamTrack.enabled = false;
+          await pub.disable();
+        } catch (_) {}
+      }
+      for (final pub in participant.videoTrackPublications) {
+        try {
+          pub.track?.mediaStreamTrack.enabled = false;
+          await pub.disable();
+        } catch (_) {}
+      }
+    }
+
+    debugPrint(
+      '[LIVEKIT_HOLD] callId=${room.name} remoteAudioTrackCount=$remoteAudioCount held=true',
+    );
+  }
+
+  /// Resumes the session by restoring remote audio/video tracks and restoring local mic/camera.
+  Future<void> resume({
+    bool restoreMic = true,
+    bool restoreCamera = false,
+  }) async {
+    if (_disposed || _disconnecting || !_isHeld) return;
+    _isHeld = false;
+
+    var remoteAudioRestored = 0;
+    // 1. Restore remote audio & video tracks
+    for (final participant in room.remoteParticipants.values) {
+      for (final pub in participant.audioTrackPublications) {
+        remoteAudioRestored++;
+        try {
+          pub.track?.mediaStreamTrack.enabled = true;
+          await pub.enable();
+        } catch (_) {}
+      }
+      for (final pub in participant.videoTrackPublications) {
+        try {
+          pub.track?.mediaStreamTrack.enabled = true;
+          await pub.enable();
+        } catch (_) {}
+      }
+    }
+
+    // 2. Restore local mic only if it was enabled before hold
+    if (restoreMic) {
+      try {
+        await room.localParticipant?.setMicrophoneEnabled(true);
+      } catch (_) {}
+    }
+
+    // 3. Restore local camera only if it was enabled before hold
+    if (restoreCamera) {
+      try {
+        await room.localParticipant?.setCameraEnabled(true);
+      } catch (_) {}
+    }
+
+    debugPrint(
+      '[LIVEKIT_RESUME] callId=${room.name} remoteAudioRestored=$remoteAudioRestored micRestored=$restoreMic cameraRestored=$restoreCamera',
+    );
   }
 
   Future<void> disconnect() {
