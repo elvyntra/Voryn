@@ -62,8 +62,14 @@ class MultiCallCoordinator extends ChangeNotifier {
   void registerSession(String callId, VorynLiveKitSession session) {
     _sessionsByCallId[callId] = session;
     _activeCallId ??= callId;
+    debugPrint('[AUDIO_OWNER] callId=$_activeCallId');
+    debugPrint('[PROXIMITY_OWNER] callId=$_activeCallId');
+    debugPrint(
+      '[MULTI_CALL_SESSION] callId=$callId roomConnected=true role=${callId == _activeCallId ? "ACTIVE" : "HELD"} engineId=primary',
+    );
     notifyListeners();
   }
+
 
   void removeSession(String callId) {
     _sessionsByCallId.remove(callId);
@@ -265,9 +271,19 @@ class MultiCallCoordinator extends ChangeNotifier {
       await VorynAudioRouteService.instance.setDefaultAudioRoute(isVideo: isVideo);
       newCoordinator.updateProximity(isConnected: true, mediaMode: isVideo ? 'video' : 'audio', isHeld: false);
 
+      debugPrint('[AUDIO_OWNER] callId=$waitingCallId');
+      debugPrint('[PROXIMITY_OWNER] callId=$waitingCallId');
+      for (final entry in _sessionsByCallId.entries) {
+        final role = entry.key == _activeCallId ? 'ACTIVE' : 'HELD';
+        debugPrint(
+          '[MULTI_CALL_SESSION] callId=${entry.key} roomConnected=true role=$role engineId=primary',
+        );
+      }
+
       debugPrint(
         '[MULTI_CALL] event=hold_accept_complete activeCallId=$waitingCallId heldCallId=$activeId rev=$currentRev',
       );
+
       _isTransitionInFlight = false;
       notifyListeners();
       return true;
@@ -386,7 +402,17 @@ class MultiCallCoordinator extends ChangeNotifier {
       isHeld: false,
     );
 
+    debugPrint('[AUDIO_OWNER] callId=$heldId');
+    debugPrint('[PROXIMITY_OWNER] callId=$heldId');
+    for (final entry in _sessionsByCallId.entries) {
+      final role = entry.key == _activeCallId ? 'ACTIVE' : 'HELD';
+      debugPrint(
+        '[MULTI_CALL_SESSION] callId=${entry.key} roomConnected=true role=$role engineId=primary',
+      );
+    }
+
     debugPrint('[MULTI_CALL] event=switch_complete active=$heldId held=$activeId rev=$currentRev');
+
     _isTransitionInFlight = false;
     notifyListeners();
     return true;
@@ -476,7 +502,17 @@ class MultiCallCoordinator extends ChangeNotifier {
         isHeld: false,
       );
 
+      debugPrint('[AUDIO_OWNER] callId=$resumedId');
+      debugPrint('[PROXIMITY_OWNER] callId=$resumedId');
+      for (final entry in _sessionsByCallId.entries) {
+        final role = entry.key == _activeCallId ? 'ACTIVE' : 'HELD';
+        debugPrint(
+          '[MULTI_CALL_SESSION] callId=${entry.key} roomConnected=true role=$role engineId=primary',
+        );
+      }
+
       notifyListeners();
+
       return;
     }
 
