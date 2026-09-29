@@ -29,26 +29,33 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _continueFromSplash() async {
     await Future<void>.delayed(const Duration(milliseconds: 900));
-    await VorynStartupPermissions.requestAfterSplash();
-    unawaited(VorynFirebaseMessaging.registerTokenAfterSplash());
-    final preferences = await SharedPreferences.getInstance();
-    final landingCompleted =
-        preferences.getBool('voryn.landing.completed') ?? false;
-    if (!mounted) return;
-    final isLocked = await LockScreenService.isKeyguardLocked();
-    if (!mounted) return;
-    if (isLocked) {
-      debugPrint('[BOOT] Splash prevented navigation: keyguard is locked');
-      await LockScreenService.moveCallTaskBehindKeyguard();
-      return;
+    try {
+      await VorynStartupPermissions.requestAfterSplash();
+      unawaited(VorynFirebaseMessaging.registerTokenAfterSplash());
+      final preferences = await SharedPreferences.getInstance();
+      final landingCompleted =
+          preferences.getBool('voryn.landing.completed') ?? false;
+      if (!mounted) return;
+      final isLocked = await LockScreenService.isKeyguardLocked();
+      if (!mounted) return;
+      if (isLocked) {
+        debugPrint('[BOOT] Splash prevented navigation: keyguard is locked');
+        await LockScreenService.moveCallTaskBehindKeyguard();
+        return;
+      }
+      final auth = const VorynAuthService();
+      final user = auth.currentSession?.user;
+      if (!landingCompleted && user == null) {
+        context.go('/landing');
+        return;
+      }
+      context.go(user == null ? '/welcome' : auth.routeAfterAuthentication(user));
+    } catch (e) {
+      debugPrint('[BOOT] Splash initialization error, falling back to /landing: $e');
+      if (mounted) {
+        context.go('/landing');
+      }
     }
-    final auth = const VorynAuthService();
-    final user = auth.currentSession?.user;
-    if (!landingCompleted && user == null) {
-      context.go('/landing');
-      return;
-    }
-    context.go(user == null ? '/welcome' : auth.routeAfterAuthentication(user));
   }
 
   @override

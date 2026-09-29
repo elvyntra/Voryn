@@ -127,7 +127,8 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       _coordinator.detachScreen();
       final newSession =
           MultiCallCoordinator.instance.sessionsByCallId[activeId];
-      final isVideo = MultiCallCoordinator.instance.waitingCallType == 'video';
+      final isVideo =
+          MultiCallCoordinator.instance.getCallType(activeId) == 'video';
       context.pushReplacement(
         isVideo ? '/active-video-call/$activeId' : '/active-audio-call/$activeId',
         extra: {'session': newSession},
@@ -171,7 +172,17 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     if (widget.existingSession != null) {
       _session = widget.existingSession;
       _coordinator.session = _session;
-      MultiCallCoordinator.instance.registerSession(widget.callId, _session!);
+      MultiCallCoordinator.instance.registerSession(
+        widget.callId,
+        _session!,
+        callType: 'video',
+      );
+      MultiCallCoordinator.instance.recordPreHoldMediaState(
+        widget.callId,
+        micEnabled: !_mutedNotifier.value,
+        cameraEnabled: _cameraEnabledNotifier.value,
+        speakerEnabled: true,
+      );
       _isConnected = true;
       await _session?.setCameraEnabled(true);
       _notifyCallActive();
@@ -195,7 +206,17 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
         video: true,
         latencyTracker: _latencyTracker,
       );
-      MultiCallCoordinator.instance.registerSession(widget.callId, _session!);
+      MultiCallCoordinator.instance.registerSession(
+        widget.callId,
+        _session!,
+        callType: 'video',
+      );
+      MultiCallCoordinator.instance.recordPreHoldMediaState(
+        widget.callId,
+        micEnabled: !_mutedNotifier.value,
+        cameraEnabled: _cameraEnabledNotifier.value,
+        speakerEnabled: true,
+      );
       _attachRoomListener();
       if (_session!.room.remoteParticipants.isNotEmpty) {
         _isConnected = true;

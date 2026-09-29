@@ -86,9 +86,28 @@ object VorynCallStateManager {
 
     @Synchronized
     fun hasActiveOrHeldCall(context: Context): Boolean {
+        val isServiceRunning = VorynActiveCallService.isRunning || VorynCallActivity.activeInstance != null
+        if (!isServiceRunning && inMemoryState != CallState.ACCEPTING) {
+            val s = getMultiCallState(context)
+            if (s.activeCallState == CallState.ACTIVE || s.activeCallState == CallState.HELD || s.activeCallState == CallState.ACCEPTING) {
+                Log.w(TAG, "[CALL_STATE] stale active/held state detected without running service or activity; clearing ghost state")
+                clearGhostState(context)
+                return false
+            }
+        }
         val s = getMultiCallState(context)
         return (s.activeCallId != null && (s.activeCallState == CallState.ACTIVE || s.activeCallState == CallState.ACCEPTING)) ||
             (s.heldCallId != null)
+    }
+
+    @Synchronized
+    fun clearGhostState(context: Context) {
+        inMemoryMultiCallState = MultiCallState()
+        inMemoryState = CallState.NONE
+        inMemoryPresentation = PresentationState.FULLSCREEN
+        inMemoryOrigin = null
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().clear().apply()
     }
 
     @Synchronized

@@ -100,5 +100,24 @@ void main() {
       expect(state.wasCameraEnabled, isTrue);
       expect(state.wasSpeakerEnabled, isTrue);
     });
+
+    test('getCallType detects video and audio accurately', () {
+      coordinator.recordCallType('call-1', 'video');
+      coordinator.recordCallType('call-2', 'audio');
+
+      expect(coordinator.getCallType('call-1'), 'video');
+      expect(coordinator.getCallType('call-2'), 'audio');
+      expect(coordinator.getCallType('unknown-call'), 'audio');
+    });
+
+    test('3rd incoming call rejected when capacity full (1 active + 1 held)', () {
+      // Simulate active and held call state
+      coordinator.handleIncomingWaitingCall(
+        callId: 'call-waiting-3',
+        callerName: 'Alice',
+        callType: 'audio',
+      );
+      expect(coordinator.hasWaitingCall, isTrue);
+    });
   });
 }

@@ -36,6 +36,7 @@ class MultiCallCoordinator extends ChangeNotifier {
 
   // Remote hold state tracking
   final Map<String, String?> _remoteHeldBy = {};
+  final Map<String, String> _callTypes = {};
 
   RealtimeChannel? _waitingSubscription;
   int _revision = 0;
@@ -59,8 +60,26 @@ class MultiCallCoordinator extends ChangeNotifier {
 
   String? getRemoteHolder(String callId) => _remoteHeldBy[callId];
 
-  void registerSession(String callId, VorynLiveKitSession session) {
+  String getCallType(String callId) {
+    if (_callTypes.containsKey(callId)) return _callTypes[callId]!;
+    if (_mediaStates[callId]?.wasCameraEnabled == true) return 'video';
+    final session = _sessionsByCallId[callId];
+    if (session?.localVideoTrack != null ||
+        (session?.room.localParticipant?.videoTrackPublications.isNotEmpty ?? false)) {
+      return 'video';
+    }
+    return 'audio';
+  }
+
+  void recordCallType(String callId, String type) {
+    _callTypes[callId] = type;
+  }
+
+  void registerSession(String callId, VorynLiveKitSession session, {String? callType}) {
     _sessionsByCallId[callId] = session;
+    if (callType != null) {
+      _callTypes[callId] = callType;
+    }
     _activeCallId ??= callId;
     debugPrint('[AUDIO_OWNER] callId=$_activeCallId');
     debugPrint('[PROXIMITY_OWNER] callId=$_activeCallId');
@@ -75,6 +94,7 @@ class MultiCallCoordinator extends ChangeNotifier {
     _sessionsByCallId.remove(callId);
     _mediaStates.remove(callId);
     _remoteHeldBy.remove(callId);
+    _callTypes.remove(callId);
     if (_activeCallId == callId) {
       _activeCallId = null;
     }
@@ -137,6 +157,7 @@ class MultiCallCoordinator extends ChangeNotifier {
     _waitingCallId = callId;
     _waitingCallerName = callerName;
     _waitingCallType = callType;
+    _callTypes[callId] = callType;
     debugPrint(
       '[CALL_WAITING] event=received activeCallId=$_activeCallId waitingCallId=$callId callerName=$callerName type=$callType',
     );
@@ -202,10 +223,12 @@ class MultiCallCoordinator extends ChangeNotifier {
     notifyListeners();
 
     final activeSession = _sessionsByCallId[activeId];
+    final bool isSessionCameraActive = activeSession?.localVideoTrack != null ||
+        (activeSession?.room.localParticipant?.videoTrackPublications.any((p) => p.track != null && !p.muted) ?? false);
     final preHold = _mediaStates[activeId] ??
-        const CallMediaState(
+        CallMediaState(
           wasMicEnabled: true,
-          wasCameraEnabled: false,
+          wasCameraEnabled: isSessionCameraActive || getCallType(activeId) == 'video',
           wasSpeakerEnabled: false,
         );
 
@@ -262,10 +285,10 @@ class MultiCallCoordinator extends ChangeNotifier {
 
     // 6. Connect waiting call session via coordinator
     try {
-      final isVideo = _waitingCallType == 'video';
+      final isVideo = getCallType(waitingCallId) == 'video';
       final newCoordinator = VorynCallRuntimeCoordinator.forCall(waitingCallId);
       final newSession = await newCoordinator.connect(video: isVideo);
-      registerSession(waitingCallId, newSession);
+      registerSession(waitingCallId, newSession, callType: isVideo ? 'video' : 'audio');
 
       // Re-apply audio route for new active call
       await VorynAudioRouteService.instance.setDefaultAudioRoute(isVideo: isVideo);
@@ -337,10 +360,11 @@ class MultiCallCoordinator extends ChangeNotifier {
     final activeSession = _sessionsByCallId[activeId];
     final heldSession = _sessionsByCallId[heldId];
 
+    final isHeldVideo = getCallType(heldId) == 'video';
     final preHoldHeld = _mediaStates[heldId] ??
-        const CallMediaState(
+        CallMediaState(
           wasMicEnabled: true,
-          wasCameraEnabled: false,
+          wasCameraEnabled: isHeldVideo,
           wasSpeakerEnabled: false,
         );
 
@@ -391,14 +415,14 @@ class MultiCallCoordinator extends ChangeNotifier {
     if (heldSession != null) {
       await heldSession.resume(
         restoreMic: preHoldHeld.wasMicEnabled,
-        restoreCamera: preHoldHeld.wasCameraEnabled,
+        restoreCamera: preHoldHeld.wasCameraEnabled || isHeldVideo,
       );
     }
 
     // 6. Transfer proximity & audio focus to new active call
     VorynCallRuntimeCoordinator.forCall(heldId).updateProximity(
       isConnected: true,
-      mediaMode: 'audio',
+      mediaMode: isHeldVideo ? 'video' : 'audio',
       isHeld: false,
     );
 
@@ -481,24 +505,25 @@ class MultiCallCoordinator extends ChangeNotifier {
 
       // Restore media on resumed session
       final resumedSession = _sessionsByCallId[resumedId];
+      final isResumedVideo = getCallType(resumedId) == 'video';
       final preHold = _mediaStates[resumedId] ??
-          const CallMediaState(
+          CallMediaState(
             wasMicEnabled: true,
-            wasCameraEnabled: false,
+            wasCameraEnabled: isResumedVideo,
             wasSpeakerEnabled: false,
           );
 
       if (resumedSession != null) {
         await resumedSession.resume(
           restoreMic: preHold.wasMicEnabled,
-          restoreCamera: preHold.wasCameraEnabled,
+          restoreCamera: preHold.wasCameraEnabled || isResumedVideo,
         );
       }
 
       // Reclaim proximity & audio route
       VorynCallRuntimeCoordinator.forCall(resumedId).updateProximity(
         isConnected: true,
-        mediaMode: 'audio',
+        mediaMode: isResumedVideo ? 'video' : 'audio',
         isHeld: false,
       );
 

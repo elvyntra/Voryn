@@ -126,7 +126,8 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       _coordinator.detachScreen();
       final newSession =
           MultiCallCoordinator.instance.sessionsByCallId[activeId];
-      final isVideo = MultiCallCoordinator.instance.waitingCallType == 'video';
+      final isVideo =
+          MultiCallCoordinator.instance.getCallType(activeId) == 'video';
       context.pushReplacement(
         isVideo ? '/active-video-call/$activeId' : '/active-audio-call/$activeId',
         extra: {'session': newSession},
@@ -171,7 +172,17 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (widget.existingSession != null) {
       _session = widget.existingSession;
       _coordinator.session = _session;
-      MultiCallCoordinator.instance.registerSession(widget.callId, _session!);
+      MultiCallCoordinator.instance.registerSession(
+        widget.callId,
+        _session!,
+        callType: 'audio',
+      );
+      MultiCallCoordinator.instance.recordPreHoldMediaState(
+        widget.callId,
+        micEnabled: !_muted,
+        cameraEnabled: false,
+        speakerEnabled: _speakerOn,
+      );
       _isConnected = true;
       _speakerOn = false;
       unawaited(_session?.setSpeakerEnabled(false));
@@ -197,7 +208,17 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         video: false,
         latencyTracker: _latencyTracker,
       );
-      MultiCallCoordinator.instance.registerSession(widget.callId, _session!);
+      MultiCallCoordinator.instance.registerSession(
+        widget.callId,
+        _session!,
+        callType: 'audio',
+      );
+      MultiCallCoordinator.instance.recordPreHoldMediaState(
+        widget.callId,
+        micEnabled: !_muted,
+        cameraEnabled: false,
+        speakerEnabled: false,
+      );
       _speakerOn = false;
       await _session?.setSpeakerEnabled(false);
       _attachRoomListener();

@@ -929,6 +929,22 @@ GoRouter _buildRouter({String? initialLocation}) {
       ),
       GoRoute(
         parentNavigatorKey: rootNavigatorKey,
+        path: '/call/waiting/accept/:callId',
+        redirect: (context, state) {
+          final callId = state.pathParameters['callId'] ?? '';
+          if (callId.isNotEmpty) {
+            unawaited(MultiCallCoordinator.instance.holdAndAccept(callId));
+          }
+          final activeId = MultiCallCoordinator.instance.activeCallId ?? callId;
+          final isVideo =
+              MultiCallCoordinator.instance.getCallType(activeId) == 'video';
+          return isVideo
+              ? '/active-video-call/$activeId'
+              : '/active-audio-call/$activeId';
+        },
+      ),
+      GoRoute(
+        parentNavigatorKey: rootNavigatorKey,
         path: '/group-call/:callId',
         builder: (context, state) {
           final callId = state.pathParameters['callId'] ?? 'meeting';

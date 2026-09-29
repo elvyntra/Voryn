@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:voryn/features/calling/widgets/call_waiting_banner.dart';
+import 'package:voryn/features/calling/widgets/held_call_bar.dart';
 import 'package:voryn/main.dart';
 
 void main() {
@@ -131,6 +133,66 @@ void main() {
 
       expect(find.text('Add People to Call'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'CallWaitingBanner renders caller identity and triggers action callbacks',
+    (tester) async {
+      var declined = false;
+      var heldAndAccepted = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: CallWaitingBanner(
+                callerName: 'Vikash Chaurasiya',
+                callType: 'audio',
+                onDecline: () => declined = true,
+                onHoldAndAccept: () => heldAndAccepted = true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Call Waiting'), findsOneWidget);
+      expect(find.text('Vikash Chaurasiya'), findsOneWidget);
+      expect(find.text('Decline'), findsOneWidget);
+      expect(find.text('Hold & Accept'), findsOneWidget);
+
+      await tester.tap(find.text('Decline'));
+      expect(declined, isTrue);
+
+      await tester.tap(find.text('Hold & Accept'));
+      expect(heldAndAccepted, isTrue);
+    },
+  );
+
+  testWidgets(
+    'HeldCallBar renders held contact and triggers switch callback',
+    (tester) async {
+      var switched = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: HeldCallBar(
+                heldContactName: 'Lucky',
+                onSwitch: () => switched = true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('On hold: Lucky'), findsOneWidget);
+      expect(find.text('Switch'), findsOneWidget);
+
+      await tester.tap(find.text('Switch'));
+      expect(switched, isTrue);
     },
   );
 }

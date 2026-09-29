@@ -129,6 +129,7 @@ class LockScreenService {
     void Function(Map<String, String> data)? onCallWaiting,
     void Function(String callId)? onCallWaitingCancelled,
   }) {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onCallLaunchIntent') {
         final arguments = call.arguments;

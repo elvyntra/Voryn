@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,6 +15,7 @@ class VorynStartupPermissions {
 
   /// Presents Android's native permission dialogs once, immediately after splash.
   static Future<void> requestAfterSplash() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final preferences = await SharedPreferences.getInstance();
     if (preferences.getBool(_completedKey) ?? false) return;
 

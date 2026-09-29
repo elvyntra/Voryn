@@ -22,6 +22,9 @@ class VorynActiveCallService : Service() {
         private const val CHANNEL_NAME = "Active calls"
         private const val NOTIFICATION_ID = 4001
 
+        @Volatile
+        var isRunning = false
+
         const val ACTION_START_CALL = "com.voryn.app.ACTION_START_ACTIVE_CALL"
         const val ACTION_STOP_CALL = "com.voryn.app.ACTION_STOP_ACTIVE_CALL"
 
@@ -85,6 +88,7 @@ class VorynActiveCallService : Service() {
                 @Suppress("DEPRECATION")
                 stopForeground(true)
             }
+            isRunning = false
             stopSelf()
             return START_NOT_STICKY
         }
@@ -193,8 +197,14 @@ class VorynActiveCallService : Service() {
             }
             Log.d(TAG, "[ACTIVE_CALL_SERVICE] start callId=$callId")
             Log.d(TAG, "[ACTIVE_NOTIFICATION] posted callId=$callId")
+            isRunning = true
         } catch (e: Exception) {
             Log.e(TAG, "[ACTIVE_SERVICE] startForeground error: ${e.message}")
         }
+    }
+
+    override fun onDestroy() {
+        isRunning = false
+        super.onDestroy()
     }
 }

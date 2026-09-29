@@ -270,7 +270,7 @@ object IncomingCallNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val targetActivityClass = if (VorynCallActivity.activeInstance != null) {
+        val targetActivityClass = if (VorynCallActivity.activeInstance != null || VorynCallStateManager.hasActiveOrHeldCall(context)) {
             VorynCallActivity::class.java
         } else {
             MainActivity::class.java
@@ -280,9 +280,10 @@ object IncomingCallNotificationManager {
             action = "com.voryn.app.ACTION_HOLD_AND_ACCEPT_CALL"
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("call_id", callId)
+            putExtra("action_id", "hold_and_accept")
+            putExtra("action", "hold_and_accept")
             putExtra("caller_name", callerName)
             putExtra("call_type", callType)
-            data = android.net.Uri.parse("voryn://call/waiting/accept/$callId")
         }
         val acceptPendingIntent = PendingIntent.getActivity(
             context,
