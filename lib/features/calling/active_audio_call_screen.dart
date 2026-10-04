@@ -31,6 +31,7 @@ class ActiveAudioCallScreen extends StatefulWidget {
     this.existingSession,
     this.initialMuted = false,
     this.initialSpeakerOn = false,
+    this.allowAutoUpgrade = true,
   });
 
   final String callId;
@@ -38,6 +39,7 @@ class ActiveAudioCallScreen extends StatefulWidget {
   final VorynLiveKitSession? existingSession;
   final bool initialMuted;
   final bool initialSpeakerOn;
+  final bool allowAutoUpgrade;
 
   @override
   State<ActiveAudioCallScreen> createState() => _ActiveAudioCallScreenState();
@@ -65,6 +67,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   bool _ended = false;
   bool _listenerAttached = false;
   bool _markedActive = false;
+  bool _remoteHadVideo = false;
 
   void _notifyCallActive() {
     if (_markedActive) return;
@@ -179,6 +182,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (widget.existingSession != null) {
       _session = widget.existingSession;
       _coordinator.session = _session;
+      unawaited(_session?.setCameraEnabled(false));
       MultiCallCoordinator.instance.registerSession(
         widget.callId,
         _session!,
@@ -304,7 +308,16 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   void _attachRoomListener() {
     if (_listenerAttached || _session == null) return;
     _listenerAttached = true;
-    _session!.room.addListener(_onRoomChanged);
+    final room = _session!.room;
+    _remoteHadVideo = room.remoteParticipants.values.any(
+      (p) => p.videoTrackPublications.any(
+        (pub) =>
+            pub.source == livekit.TrackSource.camera &&
+            !pub.muted &&
+            pub.subscribed,
+      ),
+    );
+    room.addListener(_onRoomChanged);
   }
 
   void _detachRoomListener() {
@@ -344,26 +357,35 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     }
 
     // Detect if remote participant enabled video (upgrade audio call to video call on recipient side)
-    for (final participant in room.remoteParticipants.values) {
-      final hasVideo = participant.videoTrackPublications.any(
-        (p) => p.source == livekit.TrackSource.camera && !p.muted && p.subscribed,
+    final remoteHasVideo = room.remoteParticipants.values.any(
+      (p) => p.videoTrackPublications.any(
+        (pub) =>
+            pub.source == livekit.TrackSource.camera &&
+            !pub.muted &&
+            pub.subscribed,
+      ),
+    );
+
+    if (widget.allowAutoUpgrade &&
+        remoteHasVideo &&
+        !_remoteHadVideo &&
+        !_coordinator.isTransitioning) {
+      _remoteHadVideo = true;
+      _coordinator.isTransitioning = true;
+      MultiCallCoordinator.instance.recordCallType(widget.callId, 'video');
+      _detachRoomListener();
+      context.pushReplacement(
+        '/active-video-call/${widget.callId}',
+        extra: {
+          'user': _user,
+          'session': _session,
+          'isMuted': _muted,
+          'cameraEnabled': false,
+        },
       );
-      if (hasVideo && !_coordinator.isTransitioning) {
-        _coordinator.isTransitioning = true;
-        MultiCallCoordinator.instance.recordCallType(widget.callId, 'video');
-        _detachRoomListener();
-        context.pushReplacement(
-          '/active-video-call/${widget.callId}',
-          extra: {
-            'user': _user,
-            'session': _session,
-            'isMuted': _muted,
-            'cameraEnabled': false,
-          },
-        );
-        return;
-      }
+      return;
     }
+    _remoteHadVideo = remoteHasVideo;
 
     // If more than 1 remote participant is in the room, verify and escalate to group call UI
     if (room.remoteParticipants.length > 1) {

@@ -288,6 +288,7 @@ class _VorynCallHostAppState extends State<VorynCallHostApp> {
             existingSession: extra?['session'] as VorynLiveKitSession?,
             initialMuted: extra?['isMuted'] as bool? ?? false,
             initialSpeakerOn: extra?['speakerOn'] as bool? ?? false,
+            allowAutoUpgrade: extra?['allowAutoUpgrade'] as bool? ?? true,
           );
         },
       ),
@@ -915,6 +916,7 @@ GoRouter _buildRouter({String? initialLocation}) {
             existingSession: session,
             initialMuted: extra?['isMuted'] as bool? ?? false,
             initialSpeakerOn: extra?['speakerOn'] as bool? ?? false,
+            allowAutoUpgrade: extra?['allowAutoUpgrade'] as bool? ?? true,
           );
         },
       ),

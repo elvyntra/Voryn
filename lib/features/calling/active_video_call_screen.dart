@@ -562,6 +562,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
         'session': _session,
         'isMuted': _mutedNotifier.value,
         'speakerOn': false,
+        'allowAutoUpgrade': false,
       },
     );
   }
