@@ -228,6 +228,10 @@ class _UserPreviewScreenState extends State<UserPreviewScreen> {
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
+    backgroundColor: context.vorynColors.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
     builder: (_) => QuickMessageSheet(user: user),
   );
 
@@ -469,86 +473,102 @@ class _QuickMessageSheetState extends State<QuickMessageSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     final spacing = context.vorynSpacing;
     final canSend = _preset != null || _message.text.trim().isNotEmpty;
 
     return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          spacing.screen,
-          8,
-          spacing.screen,
-          MediaQuery.viewInsetsOf(context).bottom + spacing.md,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Message ${widget.user.displayName}',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            SizedBox(height: spacing.xs),
-            Text(
-              '${widget.user.name} · ${widget.user.id}',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            SizedBox(height: spacing.lg),
-            for (final preset in _presets)
-              VorynCard(
-                onPressed: () {
-                  setState(() {
-                    _preset = preset;
-                    _message.clear();
-                  });
-                },
-                enabled: true,
-                child: Row(
-                  children: [
-                    Icon(
-                      _preset == preset
-                          ? Icons.radio_button_checked
-                          : Icons.radio_button_off,
-                      color: _preset == preset
-                          ? context.vorynColors.accent
-                          : context.vorynColors.iconMuted,
+      top: false,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 540,
+            maxHeight: media.size.height * 0.88,
+          ),
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(
+                spacing.screen,
+                8,
+                spacing.screen,
+                spacing.md,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Message ${widget.user.displayName}',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  SizedBox(height: spacing.xs),
+                  Text(
+                    '${widget.user.name} · ${widget.user.id}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  SizedBox(height: spacing.lg),
+                  for (final preset in _presets) ...[
+                    VorynCard(
+                      onPressed: () {
+                        setState(() {
+                          _preset = preset;
+                          _message.clear();
+                        });
+                      },
+                      enabled: true,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _preset == preset
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_off,
+                            color: _preset == preset
+                                ? context.vorynColors.accent
+                                : context.vorynColors.iconMuted,
+                          ),
+                          SizedBox(width: spacing.sm),
+                          Expanded(child: Text(preset)),
+                        ],
+                      ),
                     ),
-                    SizedBox(width: spacing.sm),
-                    Expanded(child: Text(preset)),
+                    SizedBox(height: spacing.xs),
                   ],
-                ),
+                  SizedBox(height: spacing.xs),
+                  TextField(
+                    controller: _message,
+                    maxLength: 120,
+                    onChanged: (_) => setState(() => _preset = null),
+                    decoration: const InputDecoration(labelText: 'Write a message'),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _remind,
+                    onChanged: (value) => setState(() => _remind = value),
+                    title: const Text('Remind them to call me'),
+                  ),
+                  VorynButton.primary(
+                    label: 'Send',
+                    isLoading: _sending,
+                    onPressed: canSend && !_sending ? _send : null,
+                  ),
+                  if ((widget.user.backendUid != null &&
+                          widget.user.backendUid!.isNotEmpty) ||
+                      widget.user.id.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: _openFullConversation,
+                        icon: const Icon(Icons.forum_outlined, size: 18),
+                        label: const Text('View full conversation'),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-            SizedBox(height: spacing.sm),
-            TextField(
-              controller: _message,
-              maxLength: 120,
-              onChanged: (_) => setState(() => _preset = null),
-              decoration: const InputDecoration(labelText: 'Write a message'),
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _remind,
-              onChanged: (value) => setState(() => _remind = value),
-              title: const Text('Remind them to call me'),
-            ),
-            VorynButton.primary(
-              label: 'Send',
-              isLoading: _sending,
-              onPressed: canSend && !_sending ? _send : null,
-            ),
-            if ((widget.user.backendUid != null &&
-                    widget.user.backendUid!.isNotEmpty) ||
-                widget.user.id.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Center(
-                child: TextButton.icon(
-                  onPressed: _openFullConversation,
-                  icon: const Icon(Icons.forum_outlined, size: 18),
-                  label: const Text('View full conversation'),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
@@ -591,31 +611,49 @@ class _QuickMessageSheetState extends State<QuickMessageSheet> {
   }
 
   Future<void> _send() async {
-    final text = _preset ?? _message.text;
+    final text = (_preset ?? _message.text).trim();
+    if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
-    final result = await const VorynCallMessageService().send(
-      recipientVorynId: widget.user.id,
-      body: text,
-      remindToCall: _remind,
-    );
-    if (!mounted) return;
-    setState(() => _sending = false);
-    if (!result.isSuccess) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(result.error!)));
-      return;
-    }
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _remind
-              ? 'Message sent. They were asked to call you back.'
-              : 'Message sent',
+    try {
+      final result = await const VorynCallMessageService().send(
+        recipientVorynId: widget.user.id,
+        body: text,
+        remindToCall: _remind,
+      );
+      if (!mounted) return;
+      if (!result.isSuccess) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.error ?? "Couldn't send message. Please try again.",
+            ),
+          ),
+        );
+        return;
+      }
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _remind
+                ? 'Message sent. They were asked to call you back.'
+                : 'Message sent',
+          ),
         ),
-      ),
-    );
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't send message. Please try again."),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
   }
 }
 
@@ -653,68 +691,82 @@ class _SaveContactSheetState extends State<SaveContactSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     final spacing = context.vorynSpacing;
 
     return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          spacing.screen,
-          8,
-          spacing.screen,
-          MediaQuery.viewInsetsOf(context).bottom + spacing.md,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              widget.title,
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            SizedBox(height: spacing.sm),
-            Text(
-              widget.user.name,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            Text(widget.user.id, style: Theme.of(context).textTheme.bodyMedium),
-            SizedBox(height: spacing.lg),
-            VorynTextInput(
-              label: widget.label,
-              controller: _name,
-              errorText: _error,
-            ),
-            SizedBox(height: spacing.xs),
-            Text(
-              'This name is private and only visible to you.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            SizedBox(height: spacing.lg),
-            Row(
-              children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel'),
+      top: false,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 540,
+            maxHeight: media.size.height * 0.88,
+          ),
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(
+                spacing.screen,
+                8,
+                spacing.screen,
+                spacing.md,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    widget.title,
+                    style: Theme.of(context).textTheme.headlineMedium,
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: VorynButton.primary(
-                    label: 'Save',
-                    onPressed: () {
-                      final value = _name.text.trim();
-                      if (value.isEmpty) {
-                        setState(() => _error = 'Enter a contact name');
-                        return;
-                      }
-                      widget.onSaved(value);
-                      Navigator.pop(context);
-                    },
+                  SizedBox(height: spacing.sm),
+                  Text(
+                    widget.user.name,
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                ),
-              ],
+                  Text(widget.user.id, style: Theme.of(context).textTheme.bodyMedium),
+                  SizedBox(height: spacing.lg),
+                  VorynTextInput(
+                    label: widget.label,
+                    controller: _name,
+                    errorText: _error,
+                  ),
+                  SizedBox(height: spacing.xs),
+                  Text(
+                    'This name is private and only visible to you.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  SizedBox(height: spacing.lg),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: VorynButton.primary(
+                          label: 'Save',
+                          onPressed: () {
+                            final value = _name.text.trim();
+                            if (value.isEmpty) {
+                              setState(() => _error = 'Enter a contact name');
+                              return;
+                            }
+                            widget.onSaved(value);
+                            Navigator.pop(context);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -791,67 +843,85 @@ class _ReportUserSheetState extends State<ReportUserSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     final spacing = context.vorynSpacing;
 
     return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          spacing.screen,
-          8,
-          spacing.screen,
-          MediaQuery.viewInsetsOf(context).bottom + spacing.md,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Report user',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            SizedBox(height: spacing.xs),
-            Text(
-              'Tell us what happened.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            SizedBox(height: spacing.md),
-            for (final entry in _reasons)
-              VorynCard(
-                onPressed: _submitting
-                    ? null
-                    : () => setState(() => _selectedCode = entry.$2),
-                child: Row(
-                  children: [
-                    Icon(
-                      _selectedCode == entry.$2
-                          ? Icons.radio_button_checked
-                          : Icons.radio_button_off,
-                      color: _selectedCode == entry.$2
-                          ? context.vorynColors.accent
-                          : context.vorynColors.iconMuted,
+      top: false,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 540,
+            maxHeight: media.size.height * 0.88,
+          ),
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(
+                spacing.screen,
+                8,
+                spacing.screen,
+                spacing.md,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Report user',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  SizedBox(height: spacing.xs),
+                  Text(
+                    'Tell us what happened.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  SizedBox(height: spacing.md),
+                  for (final entry in _reasons) ...[
+                    VorynCard(
+                      onPressed: _submitting
+                          ? null
+                          : () => setState(() => _selectedCode = entry.$2),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _selectedCode == entry.$2
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_off,
+                            color: _selectedCode == entry.$2
+                                ? context.vorynColors.accent
+                                : context.vorynColors.iconMuted,
+                          ),
+                          SizedBox(width: spacing.sm),
+                          Expanded(child: Text(entry.$1)),
+                        ],
+                      ),
                     ),
-                    SizedBox(width: spacing.sm),
-                    Expanded(child: Text(entry.$1)),
+                    SizedBox(height: spacing.xs),
                   ],
-                ),
+                  if (_selectedCode == 'other') ...[
+                    SizedBox(height: spacing.xs),
+                    TextField(
+                      controller: _details,
+                      maxLength: 250,
+                      decoration: const InputDecoration(
+                        labelText: 'Additional details',
+                      ),
+                    ),
+                  ],
+                  SizedBox(height: spacing.sm),
+                  VorynButton.primary(
+                    label: 'Submit report',
+                    isLoading: _submitting,
+                    onPressed: (_selectedCode == null || _submitting)
+                        ? null
+                        : _submit,
+                  ),
+                ],
               ),
-            if (_selectedCode == 'other')
-              TextField(
-                controller: _details,
-                maxLength: 250,
-                decoration: const InputDecoration(
-                  labelText: 'Additional details',
-                ),
-              ),
-            SizedBox(height: spacing.sm),
-            VorynButton.primary(
-              label: 'Submit report',
-              isLoading: _submitting,
-              onPressed: (_selectedCode == null || _submitting)
-                  ? null
-                  : _submit,
             ),
-          ],
+          ),
         ),
       ),
     );

@@ -62,3 +62,4 @@ app.*.map.json
 supabase/.temp/
 .temp/
 *.pdf
+scratch/

@@ -29,11 +29,15 @@ class ActiveAudioCallScreen extends StatefulWidget {
     required this.callId,
     this.user,
     this.existingSession,
+    this.initialMuted = false,
+    this.initialSpeakerOn = false,
   });
 
   final String callId;
   final VorynMockUser? user;
   final VorynLiveKitSession? existingSession;
+  final bool initialMuted;
+  final bool initialSpeakerOn;
 
   @override
   State<ActiveAudioCallScreen> createState() => _ActiveAudioCallScreenState();
@@ -50,10 +54,10 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   );
 
   bool _loading = true;
-  bool _muted = false;
+  late bool _muted;
   bool _held = false;
   bool _screenSharing = false;
-  bool _speakerOn = false;
+  late bool _speakerOn;
   bool _isConnected = false;
   String _callStatusText = 'Calling…';
 
@@ -77,6 +81,8 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   @override
   void initState() {
     super.initState();
+    _muted = widget.initialMuted;
+    _speakerOn = widget.initialSpeakerOn;
     debugPrint('[CALL_ROUTE] active route initState');
     LockScreenService.cancelNativeIncomingCall(widget.callId, reason: 'accept');
     _coordinator = VorynCallRuntimeCoordinator.forCall(widget.callId);
@@ -90,6 +96,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     });
 
     _coordinator.attachScreen(
+      screenKey: this,
       onStatusChanged: _handleRealtimeStatus,
       onRouteExit: _handleRouteExit,
     );
@@ -284,10 +291,12 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   }
 
   void _startTimer() {
+    _coordinator.markConnected();
+    _durationNotifier.value = _coordinator.currentDuration;
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!_held && !_ending && !_ended) {
-        _durationNotifier.value += const Duration(seconds: 1);
+        _durationNotifier.value = _coordinator.currentDuration;
       }
     });
   }
@@ -332,6 +341,28 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         }),
       );
       if (mounted) setState(() {});
+    }
+
+    // Detect if remote participant enabled video (upgrade audio call to video call on recipient side)
+    for (final participant in room.remoteParticipants.values) {
+      final hasVideo = participant.videoTrackPublications.any(
+        (p) => p.source == livekit.TrackSource.camera && !p.muted && p.subscribed,
+      );
+      if (hasVideo && !_coordinator.isTransitioning) {
+        _coordinator.isTransitioning = true;
+        MultiCallCoordinator.instance.recordCallType(widget.callId, 'video');
+        _detachRoomListener();
+        context.pushReplacement(
+          '/active-video-call/${widget.callId}',
+          extra: {
+            'user': _user,
+            'session': _session,
+            'isMuted': _muted,
+            'cameraEnabled': false,
+          },
+        );
+        return;
+      }
     }
 
     // If more than 1 remote participant is in the room, verify and escalate to group call UI
@@ -440,14 +471,36 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   }
 
   void _switchToVideo() async {
+    if (_ending || _ended) return;
     _coordinator.isTransitioning = true;
+    MultiCallCoordinator.instance.recordCallType(widget.callId, 'video');
+
+    bool cameraOk = true;
+    if (_session != null) {
+      cameraOk = await _session!.setCameraEnabled(true);
+      if (!cameraOk && mounted) {
+        _coordinator.isTransitioning = false;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not access camera. Audio call remains active.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+    }
+
     await _coordinator.prepareForVideoUpgrade();
     _detachRoomListener();
-    _coordinator.detachScreen();
     if (!mounted) return;
     context.pushReplacement(
       '/active-video-call/${widget.callId}',
-      extra: {'user': _user, 'session': _session},
+      extra: {
+        'user': _user,
+        'session': _session,
+        'isMuted': _muted,
+        'cameraEnabled': cameraOk,
+      },
     );
   }
 
@@ -568,12 +621,13 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     _timer?.cancel();
     _detachRoomListener();
     _durationNotifier.dispose();
-    if (!_coordinator.isTransitioning &&
+    if (_coordinator.isScreenActive(this) &&
+        !_coordinator.isTransitioning &&
         !_coordinator.isEnded &&
         MultiCallCoordinator.instance.heldCallId != widget.callId) {
       _coordinator.performTeardown(isLocalInitiator: true);
     }
-    _coordinator.detachScreen();
+    _coordinator.detachScreen(this);
     super.dispose();
   }
 

@@ -63,16 +63,16 @@ class VorynLiveKitSession {
         Future<void>.value();
   }
 
-  Future<void> setCameraEnabled(bool enabled) {
-    if (_disposed || _disconnecting) return Future<void>.value();
+  Future<bool> setCameraEnabled(bool enabled) {
+    if (_disposed || _disconnecting) return Future<bool>.value(false);
     final previous = _cameraOperation ?? Future<void>.value();
-    final completer = Completer<void>();
+    final completer = Completer<bool>();
     _cameraOperation = completer.future;
 
     previous
         .then((_) async {
           if (_disposed || _disconnecting) {
-            completer.complete();
+            completer.complete(false);
             return;
           }
           try {
@@ -89,13 +89,14 @@ class VorynLiveKitSession {
                 await participant.setCameraEnabled(enabled);
               }
             }
-          } catch (_) {
-          } finally {
-            completer.complete();
+            completer.complete(true);
+          } catch (e) {
+            debugPrint('Error toggling camera: $e');
+            completer.complete(false);
           }
         })
         .catchError((_) {
-          completer.complete();
+          completer.complete(false);
         });
 
     return completer.future;

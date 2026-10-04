@@ -6,7 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
 
-const vorynOAuthRedirectUrl = 'io.supabase.voryn://login-callback/';
+String get vorynOAuthRedirectUrl =>
+    kIsWeb ? '${Uri.base.origin}/' : 'io.supabase.voryn://login-callback/';
 const _backendUnavailableMessage =
     'Could not reach Voryn. Check your internet connection and try again.';
 

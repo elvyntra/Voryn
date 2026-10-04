@@ -286,6 +286,8 @@ class _VorynCallHostAppState extends State<VorynCallHostApp> {
             callId: callId,
             user: extra?['user'] as VorynMockUser?,
             existingSession: extra?['session'] as VorynLiveKitSession?,
+            initialMuted: extra?['isMuted'] as bool? ?? false,
+            initialSpeakerOn: extra?['speakerOn'] as bool? ?? false,
           );
         },
       ),
@@ -298,6 +300,8 @@ class _VorynCallHostAppState extends State<VorynCallHostApp> {
             callId: callId,
             user: extra?['user'] as VorynMockUser?,
             existingSession: extra?['session'] as VorynLiveKitSession?,
+            initialMuted: extra?['isMuted'] as bool? ?? false,
+            initialCameraEnabled: extra?['cameraEnabled'] as bool? ?? true,
           );
         },
       ),
@@ -909,6 +913,8 @@ GoRouter _buildRouter({String? initialLocation}) {
             callId: callId,
             user: user,
             existingSession: session,
+            initialMuted: extra?['isMuted'] as bool? ?? false,
+            initialSpeakerOn: extra?['speakerOn'] as bool? ?? false,
           );
         },
       ),
@@ -924,6 +930,8 @@ GoRouter _buildRouter({String? initialLocation}) {
             callId: callId,
             user: user,
             existingSession: session,
+            initialMuted: extra?['isMuted'] as bool? ?? false,
+            initialCameraEnabled: extra?['cameraEnabled'] as bool? ?? true,
           );
         },
       ),

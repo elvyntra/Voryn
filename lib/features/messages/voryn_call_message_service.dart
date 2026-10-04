@@ -1,10 +1,20 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/backend/voryn_backend.dart';
 import 'voryn_message_repository.dart';
+
+String _generateUuidV4() {
+  final rnd = Random.secure();
+  final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+}
 
 class VorynCallMessage {
   const VorynCallMessage({
@@ -77,6 +87,7 @@ class VorynCallMessageService {
     required String recipientVorynId,
     required String body,
     required bool remindToCall,
+    String? clientMessageId,
   }) async {
     final client = _client;
     if (client == null || client.auth.currentUser == null) {
@@ -91,8 +102,10 @@ class VorynCallMessageService {
       );
     }
 
+    final cId = clientMessageId ?? _generateUuidV4();
+
     debugPrint(
-      '[MESSAGE_SEND] action=quick_send_start candidate=$recipientVorynId remind=$remindToCall',
+      '[MESSAGE_SEND] action=quick_send_start candidate=$recipientVorynId remind=$remindToCall clientMessageId=$cId',
     );
 
     try {
@@ -103,6 +116,7 @@ class VorynCallMessageService {
                   'candidate': recipientVorynId,
                   'message_body': message,
                   'remind': remindToCall,
+                  'p_client_message_id': cId,
                 },
               )
               as String?;
@@ -117,13 +131,26 @@ class VorynCallMessageService {
       return const VorynCallMessageResult();
     } on PostgrestException catch (error, st) {
       debugPrint(
-        '[MESSAGE_SEND] action=quick_send_error postgrestError=${error.message}\n$st',
+        '[MESSAGE_SEND] action=quick_send_error postgrestError=${error.message} code=${error.code}\n$st',
       );
-      return VorynCallMessageResult(error: error.message);
+      final rawMsg = error.message.toLowerCase();
+      String friendlyError;
+      if (rawMsg.contains('user not found')) {
+        friendlyError = 'User not found.';
+      } else if (rawMsg.contains('messaging unavailable') || rawMsg.contains('blocked')) {
+        friendlyError = 'Messaging is unavailable for this user.';
+      } else if (rawMsg.contains('authentication required')) {
+        friendlyError = 'Sign in before sending a message.';
+      } else if (rawMsg.contains('invalid message')) {
+        friendlyError = 'Messages must be between 1 and 120 characters.';
+      } else {
+        friendlyError = "Couldn't send message. Please try again.";
+      }
+      return VorynCallMessageResult(error: friendlyError);
     } catch (e, st) {
       debugPrint('[MESSAGE_SEND] action=quick_send_error error=$e\n$st');
       return const VorynCallMessageResult(
-        error: 'Could not send this message. Please try again.',
+        error: "Couldn't send message. Please try again.",
       );
     }
   }

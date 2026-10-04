@@ -72,27 +72,45 @@ class VorynCallRuntimeCoordinator {
   /// the disposing screen from triggering teardown.
   bool isTransitioning = false;
 
+  DateTime? _connectedAt;
+  DateTime? get connectedAt => _connectedAt;
+
+  void markConnected([DateTime? timestamp]) {
+    _connectedAt ??= (timestamp ?? DateTime.now());
+  }
+
+  Duration get currentDuration =>
+      _connectedAt != null ? DateTime.now().difference(_connectedAt!) : Duration.zero;
+
   bool get isConnected => _isConnected;
   bool get isTearingDown => _isTearingDown;
   bool get isEnded => _isEnded;
   bool get routeExitIssued => _routeExitIssued;
 
+  Object? _activeScreenKey;
   Function? _onStatusChanged;
   FutureOr<void> Function()? _onRouteExit;
 
+  bool isScreenActive(Object? key) => key != null && _activeScreenKey == key;
+
   void attachScreen({
+    Object? screenKey,
     required Function onStatusChanged,
     required FutureOr<void> Function() onRouteExit,
   }) {
+    _activeScreenKey = screenKey;
     _onStatusChanged = onStatusChanged;
     _onRouteExit = onRouteExit;
     isTransitioning = false;
     _ensureSubscription();
   }
 
-  void detachScreen() {
-    _onStatusChanged = null;
-    _onRouteExit = null;
+  void detachScreen([Object? screenKey]) {
+    if (screenKey == null || _activeScreenKey == screenKey) {
+      _activeScreenKey = null;
+      _onStatusChanged = null;
+      _onRouteExit = null;
+    }
   }
 
   void updateProximity({

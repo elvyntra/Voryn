@@ -29,11 +29,15 @@ class ActiveVideoCallScreen extends StatefulWidget {
     required this.callId,
     this.user,
     this.existingSession,
+    this.initialMuted = false,
+    this.initialCameraEnabled = true,
   });
 
   final String callId;
   final VorynMockUser? user;
   final VorynLiveKitSession? existingSession;
+  final bool initialMuted;
+  final bool initialCameraEnabled;
 
   @override
   State<ActiveVideoCallScreen> createState() => _ActiveVideoCallScreenState();
@@ -48,8 +52,10 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   final ValueNotifier<Duration> _durationNotifier = ValueNotifier(
     Duration.zero,
   );
-  final ValueNotifier<bool> _cameraEnabledNotifier = ValueNotifier(true);
-  final ValueNotifier<bool> _mutedNotifier = ValueNotifier(false);
+  late final ValueNotifier<bool> _cameraEnabledNotifier =
+      ValueNotifier(widget.initialCameraEnabled);
+  late final ValueNotifier<bool> _mutedNotifier =
+      ValueNotifier(widget.initialMuted);
   final ValueNotifier<bool> _screenSharingNotifier = ValueNotifier(false);
 
   livekit.VideoTrack? _remoteTrack;
@@ -62,6 +68,18 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   bool _ended = false;
   bool _listenerAttached = false;
   bool _markedActive = false;
+  bool _controlsVisible = true;
+  bool _isLocalDominant = false;
+
+  void _toggleControls() {
+    if (!mounted) return;
+    setState(() => _controlsVisible = !_controlsVisible);
+  }
+
+  void _toggleVideoSwap() {
+    if (!mounted) return;
+    setState(() => _isLocalDominant = !_isLocalDominant);
+  }
 
   void _notifyCallActive() {
     if (_markedActive) return;
@@ -91,6 +109,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     });
 
     _coordinator.attachScreen(
+      screenKey: this,
       onStatusChanged: _handleRealtimeStatus,
       onRouteExit: _handleRouteExit,
     );
@@ -184,7 +203,11 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
         speakerEnabled: true,
       );
       _isConnected = true;
-      await _session?.setCameraEnabled(true);
+      if (_cameraEnabledNotifier.value) {
+        await _session?.setCameraEnabled(true);
+      }
+      unawaited(_session?.setSpeakerEnabled(true));
+      _coordinator.markConnected();
       _notifyCallActive();
       _attachRoomListener();
       _startTimer();
@@ -278,10 +301,12 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   }
 
   void _startTimer() {
+    _coordinator.markConnected();
+    _durationNotifier.value = _coordinator.currentDuration;
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!_ending && !_ended) {
-        _durationNotifier.value += const Duration(seconds: 1);
+        _durationNotifier.value = _coordinator.currentDuration;
       }
     });
   }
@@ -421,8 +446,21 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   Future<void> _toggleCamera() async {
     if (_ending || _ended) return;
     final next = !_cameraEnabledNotifier.value;
+    if (_session != null) {
+      final success = await _session!.setCameraEnabled(next);
+      if (!success && next) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not access camera. Call remains active.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+    }
     _cameraEnabledNotifier.value = next;
-    await _session?.setCameraEnabled(next);
     MultiCallCoordinator.instance.recordPreHoldMediaState(
       widget.callId,
       micEnabled: !_mutedNotifier.value,
@@ -511,15 +549,20 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
   void _switchToAudio() async {
     _coordinator.isTransitioning = true;
+    MultiCallCoordinator.instance.recordCallType(widget.callId, 'audio');
     try {
       await _session?.setCameraEnabled(false);
     } catch (_) {}
     _detachRoomListener();
-    _coordinator.detachScreen();
     if (!mounted) return;
     context.pushReplacement(
       '/active-audio-call/${widget.callId}',
-      extra: {'user': _user, 'session': _session},
+      extra: {
+        'user': _user,
+        'session': _session,
+        'isMuted': _mutedNotifier.value,
+        'speakerOn': false,
+      },
     );
   }
 
@@ -630,12 +673,13 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     _cameraEnabledNotifier.dispose();
     _mutedNotifier.dispose();
     _screenSharingNotifier.dispose();
-    if (!_coordinator.isTransitioning &&
+    if (_coordinator.isScreenActive(this) &&
+        !_coordinator.isTransitioning &&
         !_coordinator.isEnded &&
         MultiCallCoordinator.instance.heldCallId != widget.callId) {
       _coordinator.performTeardown(isLocalInitiator: true);
     }
-    _coordinator.detachScreen();
+    _coordinator.detachScreen(this);
     super.dispose();
   }
 
@@ -643,6 +687,52 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
+  }
+
+  Widget _buildDominantPlaceholder({
+    required bool isLocal,
+    required String remoteName,
+    required bool cameraEnabled,
+  }) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF1A1D24), Color(0xFF0C0E12)],
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CallAvatarRings(
+              initials: isLocal ? 'YOU' : _user.initials,
+              size: 110,
+            ),
+            const SizedBox(height: 20),
+            Text(
+              isLocal ? 'You' : remoteName,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              isLocal
+                  ? (cameraEnabled ? 'Starting camera…' : 'Camera off')
+                  : (_loading ? 'Connecting video…' : 'Camera off'),
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.white54,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -664,48 +754,38 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Dominant Remote Video Stage
-            if (remoteTrack != null)
-              livekit.VideoTrackRenderer(
-                remoteTrack,
-                key: ValueKey(remoteTrack.sid ?? remoteTrack.hashCode),
-                fit: livekit.VideoViewFit.cover,
-              )
-            else
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xFF1A1D24), Color(0xFF0C0E12)],
-                  ),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CallAvatarRings(initials: _user.initials, size: 110),
-                      const SizedBox(height: 20),
-                      Text(
-                        primaryName,
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
+            // Dominant Video Stage (Tapping toggles controls)
+            ValueListenableBuilder<bool>(
+              valueListenable: _cameraEnabledNotifier,
+              builder: (context, cameraEnabled, _) {
+                final dominantTrack = _isLocalDominant ? localTrack : remoteTrack;
+                final isDominantLocal = _isLocalDominant;
+                final isDominantActive = isDominantLocal
+                    ? (cameraEnabled && dominantTrack != null)
+                    : (dominantTrack != null);
+
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _toggleControls,
+                  child: isDominantActive
+                      ? livekit.VideoTrackRenderer(
+                          dominantTrack,
+                          key: ValueKey(
+                            'dominant_${dominantTrack.sid ?? dominantTrack.hashCode}',
+                          ),
+                          mirrorMode: isDominantLocal
+                              ? livekit.VideoViewMirrorMode.mirror
+                              : livekit.VideoViewMirrorMode.off,
+                          fit: livekit.VideoViewFit.cover,
+                        )
+                      : _buildDominantPlaceholder(
+                          isLocal: isDominantLocal,
+                          remoteName: primaryName,
+                          cameraEnabled: cameraEnabled,
                         ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _loading ? 'Connecting video…' : 'Camera off',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.white54,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+                );
+              },
+            ),
 
             // Top Gradient Scrim for Overlay Visibility
             Positioned(
@@ -713,15 +793,22 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
               right: 0,
               top: 0,
               height: 140,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.8),
-                      Colors.transparent,
-                    ],
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _controlsVisible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.8),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -733,114 +820,142 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
               right: 0,
               bottom: 0,
               height: 220,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.85),
-                      Colors.transparent,
-                    ],
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _controlsVisible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.85),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
 
-            // Top Overlay: CallTopBar + Identity & Timer
+            // Top Overlay: CallTopBar (animated hide/show) + Persistent Critical State Banners
             SafeArea(
               child: Column(
                 children: [
-                  CallTopBar(
-                    onMinimize: _minimize,
-                    centerWidget: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              primaryName,
-                              style: const TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 5,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colors.accent.withValues(alpha: 0.3),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Text(
-                                'HD',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF22C55E),
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            ValueListenableBuilder<Duration>(
-                              valueListenable: _durationNotifier,
-                              builder: (context, duration, _) {
-                                final isRemoteHeld =
-                                    MultiCallCoordinator.instance
-                                        .isCallHeldByRemote(widget.callId);
-                                return Text(
-                                  _loading
-                                      ? 'Connecting…'
-                                      : (isRemoteHeld
-                                            ? 'You are on hold'
-                                            : (!_isConnected
-                                                  ? _callStatusText
-                                                  : _formatTimer(duration))),
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.white70,
+                  AnimatedSlide(
+                    offset: _controlsVisible ? Offset.zero : const Offset(0, -1.2),
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeInOut,
+                    child: AnimatedOpacity(
+                      opacity: _controlsVisible ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeInOut,
+                      child: IgnorePointer(
+                        ignoring: !_controlsVisible,
+                        child: CallTopBar(
+                          onMinimize: _minimize,
+                          centerWidget: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      primaryName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
                                   ),
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 5,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: colors.accent.withValues(alpha: 0.3),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text(
+                                      'HD',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF22C55E),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: ValueListenableBuilder<Duration>(
+                                      valueListenable: _durationNotifier,
+                                      builder: (context, duration, _) {
+                                        final isRemoteHeld =
+                                            MultiCallCoordinator.instance
+                                                .isCallHeldByRemote(widget.callId);
+                                        return Text(
+                                          _loading
+                                              ? 'Connecting…'
+                                              : (isRemoteHeld
+                                                    ? 'You are on hold'
+                                                    : (!_isConnected
+                                                          ? _callStatusText
+                                                          : _formatTimer(duration))),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.white70,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          onAddParticipant: () {
+                            AddParticipantSheet.show(
+                              context,
+                              callId: widget.callId,
+                              onParticipantInvited: (vorynId) {
+                                debugPrint(
+                                  '[CALL ${widget.callId}] participant invited: $vorynId',
                                 );
                               },
-                            ),
-                          ],
+                            );
+                          },
                         ),
-                      ],
+                      ),
                     ),
-                    onAddParticipant: () {
-                      AddParticipantSheet.show(
-                        context,
-                        callId: widget.callId,
-                        onParticipantInvited: (vorynId) {
-                          debugPrint(
-                            '[CALL ${widget.callId}] participant invited: $vorynId',
-                          );
-                        },
-                      );
-                    },
                   ),
 
-                  // Multi-Call Waiting Banner
+                  // Multi-Call Waiting Banner (Persistent in all visibility states)
                   if (MultiCallCoordinator.instance.hasWaitingCall)
                     CallWaitingBanner(
                       callerName:
@@ -871,7 +986,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
                       },
                     ),
 
-                  // Multi-Call Held Bar
+                  // Multi-Call Held Bar (Persistent in all visibility states)
                   if (MultiCallCoordinator.instance.hasHeldCall)
                     HeldCallBar(
                       heldContactName: 'Other Call',
@@ -882,7 +997,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
                       },
                     ),
 
-                  // Screen Share Banner (if screen sharing active)
+                  // Screen Share Banner (Persistent in all visibility states)
                   ValueListenableBuilder<bool>(
                     valueListenable: _screenSharingNotifier,
                     builder: (context, sharing, _) {
@@ -897,88 +1012,111 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
               ),
             ),
 
-            // Floating Picture-in-Picture Local Video Preview
+            // Floating Picture-in-Picture Video Preview (Swappable & interactive)
             ListenableBuilder(
               listenable: Listenable.merge([
                 _cameraEnabledNotifier,
                 _mutedNotifier,
               ]),
               builder: (context, _) {
+                final pipTrack = _isLocalDominant ? remoteTrack : localTrack;
+                final pipEnabled = _isLocalDominant
+                    ? (remoteTrack != null)
+                    : _cameraEnabledNotifier.value;
+                final isPipLocal = !_isLocalDominant;
+
                 return VideoPip(
-                  localTrack: localTrack,
-                  isMuted: _mutedNotifier.value,
-                  isCameraEnabled: _cameraEnabledNotifier.value,
-                  userInitials: 'YOU',
+                  videoTrack: pipTrack,
+                  isMirror: isPipLocal,
+                  isMuted: isPipLocal ? _mutedNotifier.value : false,
+                  isVideoEnabled: pipEnabled,
+                  label: isPipLocal ? 'You' : primaryName,
+                  userInitials: isPipLocal ? 'YOU' : _user.initials,
+                  controlsVisible: _controlsVisible,
+                  onTap: _toggleVideoSwap,
                 );
               },
             ),
 
-            // Bottom Controls Overlay
+            // Bottom Controls Overlay (animated hide/show)
             SafeArea(
               child: Align(
                 alignment: Alignment.bottomCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Floating 2x3 Control Tray
-                      CallControlTray(
-                        row1: [
-                          ValueListenableBuilder<bool>(
-                            valueListenable: _mutedNotifier,
-                            builder: (context, muted, _) => CallControlButton(
-                              icon: muted
-                                  ? Icons.mic_off_rounded
-                                  : Icons.mic_rounded,
-                              label: muted ? 'Muted' : 'Mute',
-                              isDestructive: muted,
-                              onTap: _toggleMute,
+                child: AnimatedSlide(
+                  offset: _controlsVisible ? Offset.zero : const Offset(0, 1.2),
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: AnimatedOpacity(
+                    opacity: _controlsVisible ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeInOut,
+                    child: IgnorePointer(
+                      ignoring: !_controlsVisible,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Floating 2x3 Control Tray
+                            CallControlTray(
+                              row1: [
+                                ValueListenableBuilder<bool>(
+                                  valueListenable: _mutedNotifier,
+                                  builder: (context, muted, _) => CallControlButton(
+                                    icon: muted
+                                        ? Icons.mic_off_rounded
+                                        : Icons.mic_rounded,
+                                    label: muted ? 'Muted' : 'Mute',
+                                    isDestructive: muted,
+                                    onTap: _toggleMute,
+                                  ),
+                                ),
+                                ValueListenableBuilder<bool>(
+                                  valueListenable: _cameraEnabledNotifier,
+                                  builder: (context, enabled, _) => CallControlButton(
+                                    icon: enabled
+                                        ? Icons.videocam_rounded
+                                        : Icons.videocam_off_rounded,
+                                    label: enabled ? 'Camera' : 'Camera off',
+                                    isActive: enabled,
+                                    activeColor: colors.surfaceRaised,
+                                    onTap: _toggleCamera,
+                                  ),
+                                ),
+                                CallControlButton(
+                                  icon: Icons.flip_camera_android_rounded,
+                                  label: 'Flip',
+                                  onTap: _flipCamera,
+                                ),
+                              ],
+                              row2: [
+                                CallControlButton(
+                                  icon: Icons.volume_up_rounded,
+                                  label: 'Speaker',
+                                  onTap: _openAudioRoutes,
+                                ),
+                                ValueListenableBuilder<bool>(
+                                  valueListenable: _screenSharingNotifier,
+                                  builder: (context, sharing, _) => CallControlButton(
+                                    icon: Icons.screen_share_outlined,
+                                    label: sharing ? 'Sharing' : 'Share',
+                                    isActive: sharing,
+                                    activeColor: colors.accent,
+                                    onTap: _toggleShare,
+                                  ),
+                                ),
+                                CallControlButton(
+                                  icon: Icons.call_end_rounded,
+                                  label: 'End',
+                                  isDestructive: true,
+                                  onTap: _endCall,
+                                ),
+                              ],
                             ),
-                          ),
-                          ValueListenableBuilder<bool>(
-                            valueListenable: _cameraEnabledNotifier,
-                            builder: (context, enabled, _) => CallControlButton(
-                              icon: enabled
-                                  ? Icons.videocam_rounded
-                                  : Icons.videocam_off_rounded,
-                              label: enabled ? 'Camera' : 'Camera off',
-                              isActive: enabled,
-                              activeColor: colors.surfaceRaised,
-                              onTap: _toggleCamera,
-                            ),
-                          ),
-                          CallControlButton(
-                            icon: Icons.flip_camera_android_rounded,
-                            label: 'Flip',
-                            onTap: _flipCamera,
-                          ),
-                        ],
-                        row2: [
-                          CallControlButton(
-                            icon: Icons.volume_up_rounded,
-                            label: 'Speaker',
-                            onTap: _openAudioRoutes,
-                          ),
-                          ValueListenableBuilder<bool>(
-                            valueListenable: _screenSharingNotifier,
-                            builder: (context, sharing, _) => CallControlButton(
-                              icon: Icons.screen_share_outlined,
-                              label: sharing ? 'Sharing' : 'Share',
-                              isActive: sharing,
-                              activeColor: colors.accent,
-                              onTap: _toggleShare,
-                            ),
-                          ),
-                          CallControlButton(
-                            icon: Icons.call_end_rounded,
-                            label: 'End',
-                            isDestructive: true,
-                            onTap: _endCall,
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
