@@ -43,7 +43,8 @@ class ActiveVideoCallScreen extends StatefulWidget {
   State<ActiveVideoCallScreen> createState() => _ActiveVideoCallScreenState();
 }
 
-class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
+class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
+    with WidgetsBindingObserver {
   late VorynMockUser _user;
   late final VorynCallRuntimeCoordinator _coordinator;
   VorynCallLatencyTracker? _latencyTracker;
@@ -60,6 +61,8 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
   livekit.VideoTrack? _remoteTrack;
   livekit.VideoTrack? _localTrack;
+  int _rendererRevision = 0;
+  livekit.EventsListener<livekit.RoomEvent>? _roomEventListener;
 
   bool _loading = true;
   bool _isConnected = false;
@@ -94,8 +97,32 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('[CALL_LIFECYCLE] resumed, refreshing tracks and video renderer');
+      _refreshVideoTracks(forceRebind: true);
+    }
+  }
+
+  void _refreshVideoTracks({bool forceRebind = false}) {
+    if (!mounted) return;
+    final nextRemote = _session?.remoteVideoTrack;
+    final nextLocal = _session?.localVideoTrack;
+    if (forceRebind || nextRemote != _remoteTrack || nextLocal != _localTrack) {
+      setState(() {
+        if (forceRebind) {
+          _rendererRevision++;
+        }
+        _remoteTrack = nextRemote;
+        _localTrack = nextLocal;
+      });
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     debugPrint('[CALL_ROUTE] active route initState');
     LockScreenService.cancelNativeIncomingCall(widget.callId, reason: 'accept');
     _coordinator = VorynCallRuntimeCoordinator.forCall(widget.callId);
@@ -160,32 +187,34 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   Future<void> _start() async {
     debugPrint('[CALL_BOOTSTRAP] start');
     if (widget.user == null) {
-      try {
-        final item = await const VorynCallHistoryService()
-            .loadIncomingActiveCall(callId: widget.callId);
-        if (item != null && mounted) {
-          final parts = item.displayName
-              .split(RegExp(r'\s+'))
-              .where((p) => p.isNotEmpty)
-              .take(2)
-              .toList();
-          final initials = parts.map((p) => p[0].toUpperCase()).join();
-          setState(() {
-            _user = VorynMockUser(
-              backendUid: item.otherUid,
-              customName: null,
-              name: item.displayName,
-              id: item.vorynId.startsWith('@')
-                  ? item.vorynId
-                  : '@${item.vorynId}',
-              phone: '',
-              email: '',
-              presence: VorynPresenceStatus.online,
-              initials: initials.isEmpty ? '?' : initials,
-            );
-          });
-        }
-      } catch (_) {}
+      unawaited(
+        const VorynCallHistoryService()
+            .loadIncomingActiveCall(callId: widget.callId)
+            .then((item) {
+          if (item != null && mounted) {
+            final parts = item.displayName
+                .split(RegExp(r'\s+'))
+                .where((p) => p.isNotEmpty)
+                .take(2)
+                .toList();
+            final initials = parts.map((p) => p[0].toUpperCase()).join();
+            setState(() {
+              _user = VorynMockUser(
+                backendUid: item.otherUid,
+                customName: null,
+                name: item.displayName,
+                id: item.vorynId.startsWith('@')
+                    ? item.vorynId
+                    : '@${item.vorynId}',
+                phone: '',
+                email: '',
+                presence: VorynPresenceStatus.online,
+                initials: initials.isEmpty ? '?' : initials,
+              );
+            });
+          }
+        }).catchError((_) {}),
+      );
     }
 
     if (widget.existingSession != null) {
@@ -314,7 +343,23 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
   void _attachRoomListener() {
     if (_listenerAttached || _session == null) return;
     _listenerAttached = true;
-    _session!.room.addListener(_onRoomChanged);
+    final room = _session!.room;
+    room.addListener(_onRoomChanged);
+    _roomEventListener = room.createListener()
+      ..on<livekit.RoomReconnectingEvent>((_) {
+        if (!mounted) return;
+        setState(() => _callStatusText = 'Reconnecting…');
+      })
+      ..on<livekit.RoomReconnectedEvent>((_) {
+        if (!mounted) return;
+        _refreshVideoTracks(forceRebind: true);
+        setState(() => _callStatusText = _isConnected ? '' : 'Connected');
+      })
+      ..on<livekit.TrackSubscribedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.TrackUnsubscribedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.TrackMutedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.TrackUnmutedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.TrackStreamStateUpdatedEvent>((_) => _refreshVideoTracks(forceRebind: true));
   }
 
   void _detachRoomListener() {
@@ -322,6 +367,8 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
     _listenerAttached = false;
     try {
       _session?.room.removeListener(_onRoomChanged);
+      _roomEventListener?.dispose();
+      _roomEventListener = null;
     } catch (_) {}
   }
 
@@ -363,14 +410,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
       return;
     }
 
-    final nextRemote = _session?.remoteVideoTrack;
-    final nextLocal = _session?.localVideoTrack;
-    if (nextRemote != _remoteTrack || nextLocal != _localTrack) {
-      setState(() {
-        _remoteTrack = nextRemote;
-        _localTrack = nextLocal;
-      });
-    }
+    _refreshVideoTracks();
   }
 
   Future<void> _handleRoomDisconnected() async {
@@ -667,6 +707,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     MultiCallCoordinator.instance.removeListener(_onMultiCallChanged);
     _timer?.cancel();
     _detachRoomListener();
@@ -772,7 +813,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
                       ? livekit.VideoTrackRenderer(
                           dominantTrack,
                           key: ValueKey(
-                            'dominant_${dominantTrack.sid ?? dominantTrack.hashCode}',
+                            'dominant_${dominantTrack.sid ?? dominantTrack.hashCode}_$_rendererRevision',
                           ),
                           mirrorMode: isDominantLocal
                               ? livekit.VideoViewMirrorMode.mirror
@@ -1027,6 +1068,9 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
                 final isPipLocal = !_isLocalDominant;
 
                 return VideoPip(
+                  key: ValueKey(
+                    'pip_${pipTrack?.sid ?? pipTrack.hashCode}_$_rendererRevision',
+                  ),
                   videoTrack: pipTrack,
                   isMirror: isPipLocal,
                   isMuted: isPipLocal ? _mutedNotifier.value : false,
@@ -1058,6 +1102,51 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            // Direct, visible Switch to Audio control
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: _switchToAudio,
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: colors.surfaceRaised.withValues(
+                                        alpha: 0.85,
+                                      ),
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: Colors.white.withValues(alpha: 0.15),
+                                      ),
+                                    ),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.phone_in_talk_rounded,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Switch to Audio',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                             // Floating 2x3 Control Tray
                             CallControlTray(
                               row1: [

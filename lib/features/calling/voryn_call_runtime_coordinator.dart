@@ -203,6 +203,10 @@ class VorynCallRuntimeCoordinator {
           _isConnected = true;
           updateProximity();
           return s;
+        })
+        .catchError((error, stackTrace) {
+          _connectFuture = null;
+          throw error;
         });
   }
 

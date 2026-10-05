@@ -68,6 +68,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   bool _listenerAttached = false;
   bool _markedActive = false;
   bool _remoteHadVideo = false;
+  livekit.EventsListener<livekit.RoomEvent>? _roomEventListener;
 
   void _notifyCallActive() {
     if (_markedActive) return;
@@ -149,34 +150,36 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
 
   Future<void> _start() async {
     debugPrint('[CALL_BOOTSTRAP] start');
-    // If user info was not supplied, attempt to resolve it from the call history
+    // If user info was not supplied, attempt to resolve it asynchronously without blocking connection
     if (widget.user == null) {
-      try {
-        final item = await const VorynCallHistoryService()
-            .loadIncomingActiveCall(callId: widget.callId);
-        if (item != null && mounted) {
-          final parts = item.displayName
-              .split(RegExp(r'\s+'))
-              .where((p) => p.isNotEmpty)
-              .take(2)
-              .toList();
-          final initials = parts.map((p) => p[0].toUpperCase()).join();
-          setState(() {
-            _user = VorynMockUser(
-              backendUid: item.otherUid,
-              customName: null,
-              name: item.displayName,
-              id: item.vorynId.startsWith('@')
-                  ? item.vorynId
-                  : '@${item.vorynId}',
-              phone: '',
-              email: '',
-              presence: VorynPresenceStatus.online,
-              initials: initials.isEmpty ? '?' : initials,
-            );
-          });
-        }
-      } catch (_) {}
+      unawaited(
+        const VorynCallHistoryService()
+            .loadIncomingActiveCall(callId: widget.callId)
+            .then((item) {
+          if (item != null && mounted) {
+            final parts = item.displayName
+                .split(RegExp(r'\s+'))
+                .where((p) => p.isNotEmpty)
+                .take(2)
+                .toList();
+            final initials = parts.map((p) => p[0].toUpperCase()).join();
+            setState(() {
+              _user = VorynMockUser(
+                backendUid: item.otherUid,
+                customName: null,
+                name: item.displayName,
+                id: item.vorynId.startsWith('@')
+                    ? item.vorynId
+                    : '@${item.vorynId}',
+                phone: '',
+                email: '',
+                presence: VorynPresenceStatus.online,
+                initials: initials.isEmpty ? '?' : initials,
+              );
+            });
+          }
+        }).catchError((_) {}),
+      );
     }
 
     if (widget.existingSession != null) {
@@ -318,6 +321,17 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       ),
     );
     room.addListener(_onRoomChanged);
+    _roomEventListener = room.createListener()
+      ..on<livekit.RoomReconnectingEvent>((_) {
+        if (!mounted) return;
+        setState(() => _callStatusText = 'Reconnecting…');
+      })
+      ..on<livekit.RoomReconnectedEvent>((_) {
+        if (!mounted) return;
+        setState(() => _callStatusText = _isConnected ? '' : 'Connected');
+      })
+      ..on<livekit.TrackSubscribedEvent>((_) => _onRoomChanged())
+      ..on<livekit.TrackUnsubscribedEvent>((_) => _onRoomChanged());
   }
 
   void _detachRoomListener() {
@@ -325,6 +339,8 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     _listenerAttached = false;
     try {
       _session?.room.removeListener(_onRoomChanged);
+      _roomEventListener?.dispose();
+      _roomEventListener = null;
     } catch (_) {}
   }
 

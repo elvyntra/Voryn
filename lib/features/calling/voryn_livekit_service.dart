@@ -237,14 +237,28 @@ class VorynLiveKitService {
       throw const VorynLiveKitException('Sign in before joining a call.');
     }
 
-    await latencyTracker?.stage('livekit_token_start');
-    final response = await client.functions.invoke(
-      'livekit-token',
-      body: {'callId': callId},
-    );
+    await latencyTracker?.stage('livekit_token_request');
+    dynamic response;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        response = await client.functions.invoke(
+          'livekit-token',
+          body: {'callId': callId},
+        );
+        final data = response.data;
+        if (data is Map && data['token'] is String && (data['token'] as String).isNotEmpty) {
+          break;
+        }
+      } catch (e) {
+        if (attempt == 3) rethrow;
+      }
+      if (attempt < 3) {
+        await Future.delayed(Duration(milliseconds: 300 * attempt));
+      }
+    }
     await latencyTracker?.stage('livekit_token_done');
 
-    final data = response.data;
+    final data = response?.data;
     if (data is! Map) {
       throw const VorynLiveKitException('The call room is unavailable.');
     }
@@ -258,12 +272,14 @@ class VorynLiveKitService {
 
     final room = livekit.Room();
     try {
-      await latencyTracker?.stage('livekit_connect_start');
+      await latencyTracker?.stage('room_connect_start');
       await room.connect(url, token);
+      await latencyTracker?.stage('room_connected');
       await latencyTracker?.stage('signaling_connected');
       await latencyTracker?.stage('ice_connected');
 
       await room.localParticipant?.setMicrophoneEnabled(true);
+      await latencyTracker?.stage('local_track_published');
       await latencyTracker?.stage('local_audio_ready');
 
       await VorynAudioRouteService.instance.setDefaultAudioRoute(
@@ -273,6 +289,7 @@ class VorynLiveKitService {
       if (video) await room.localParticipant?.setCameraEnabled(true);
 
       if (room.remoteParticipants.isNotEmpty) {
+        await latencyTracker?.stage('remote_participant_joined');
         await latencyTracker?.stage('remote_audio_subscribed');
       }
 

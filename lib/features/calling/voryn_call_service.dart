@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -6,6 +7,7 @@ import '../../core/backend/voryn_backend.dart';
 import '../../core/notifications/lock_screen_service.dart';
 import '../../core/presence/voryn_presence_service.dart';
 import 'voryn_active_call_presentation_service.dart';
+import 'voryn_call_latency_tracker.dart';
 import 'voryn_call_runtime_coordinator.dart';
 
 class VorynCallRequest {
@@ -72,13 +74,15 @@ class VorynCallService {
       );
       final callId = id as String?;
       if (callId != null) {
+        final tracker = VorynCallLatencyTracker.start(callId: callId);
+        unawaited(tracker.stage('backend_start_direct_call'));
         // Delivery is best-effort; an alert failure must not block the call.
-        try {
-          await client.functions.invoke(
-            'send-call-notification',
-            body: {'callId': callId},
-          );
-        } catch (_) {}
+        unawaited(
+          client.functions
+              .invoke('send-call-notification', body: {'callId': callId})
+              .then((_) => tracker.stage('recipient_signalling_fcm'))
+              .catchError((_) {}),
+        );
       }
       return VorynCallRequest(id: callId);
     } on PostgrestException catch (error) {

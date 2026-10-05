@@ -48,5 +48,8 @@ class VorynCallLatencyTracker {
     debugPrint(
       '[CALL_LATENCY] $name callId=$callId elapsed=${elapsed}ms$extraStr',
     );
+    debugPrint(
+      '[CALL_TIMING]\ncallId=$callId\nstage=$name\nelapsedMs=$elapsed$extraStr',
+    );
   }
 }
