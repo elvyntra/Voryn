@@ -76,12 +76,12 @@ class VorynCallService {
       if (callId != null) {
         final tracker = VorynCallLatencyTracker.start(callId: callId);
         unawaited(tracker.stage('backend_start_direct_call'));
-        // Delivery is best-effort; an alert failure must not block the call.
+        // Non-blocking FCM dispatch with durable bounded retry for transient errors.
         unawaited(
-          client.functions
-              .invoke('send-call-notification', body: {'callId': callId})
-              .then((_) => tracker.stage('recipient_signalling_fcm'))
-              .catchError((_) {}),
+          dispatchCallNotificationWithRetry(
+            callId: callId,
+            tracker: tracker,
+          ),
         );
       }
       return VorynCallRequest(id: callId);
@@ -281,12 +281,13 @@ class VorynCallService {
       );
     } catch (_) {}
 
-    try {
-      await client.functions.invoke(
-        'send-call-notification',
-        body: {'callId': callId, 'action': 'end'},
-      );
-    } catch (_) {}
+    unawaited(
+      dispatchCallNotificationWithRetry(
+        callId: callId,
+        extraBody: {'action': 'end'},
+        maxAttempts: 2,
+      ),
+    );
   }
 
   Future<void> cancel(String callId) async {
@@ -314,12 +315,13 @@ class VorynCallService {
       );
     } catch (_) {}
 
-    try {
-      await client.functions.invoke(
-        'send-call-notification',
-        body: {'callId': callId, 'action': 'cancel'},
-      );
-    } catch (_) {}
+    unawaited(
+      dispatchCallNotificationWithRetry(
+        callId: callId,
+        extraBody: {'action': 'cancel'},
+        maxAttempts: 2,
+      ),
+    );
   }
 
   Future<void> setConnected(String callId) async {
@@ -601,15 +603,12 @@ class VorynCallService {
       debugPrint('[CALL $callId] RPC success participantId=$resolvedUid');
 
       // Dispatch invitation notification to the newly added participant
-      try {
-        await client.functions.invoke(
-          'send-call-notification',
-          body: {'callId': callId, 'recipientUid': resolvedUid},
-        );
-        debugPrint('[CALL $callId] invitation push sent');
-      } catch (e) {
-        debugPrint('[CALL $callId] invitation push delivery failed: $e');
-      }
+      unawaited(
+        dispatchCallNotificationWithRetry(
+          callId: callId,
+          extraBody: {'recipientUid': resolvedUid},
+        ),
+      );
 
       if (result is Map) {
         return Map<String, dynamic>.from(result);
@@ -619,5 +618,87 @@ class VorynCallService {
       debugPrint('[CALL $callId] add participant failed: $e');
       throw Exception("Couldn't invite this person. Try again.");
     }
+  }
+
+  /// Dispatches call push notification with durable bounded retry for transient errors.
+  /// Stops immediately on permanent auth/availability errors (400, 401, 403) or if
+  /// backend call state is no longer authoritative ('calling').
+  @visibleForTesting
+  Future<bool> dispatchCallNotificationWithRetry({
+    required String callId,
+    Map<String, dynamic>? extraBody,
+    VorynCallLatencyTracker? tracker,
+    int maxAttempts = 3,
+    Future<FunctionResponse> Function(String functionName, {Map<String, dynamic>? body})? invokeOverride,
+    bool Function()? isAuthenticatedOverride,
+    Future<Map<String, dynamic>?> Function(String callId)? getCallOverride,
+    Duration? retryDelayOverride,
+  }) async {
+    final client = VorynBackend.client;
+    final isAuth = isAuthenticatedOverride != null
+        ? isAuthenticatedOverride()
+        : (client != null && client.auth.currentUser != null);
+    if (!isAuth) return false;
+
+    final body = <String, dynamic>{'callId': callId, ...?extraBody};
+    final isIncoming = body['action'] == null;
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1 && isIncoming) {
+        final call = getCallOverride != null
+            ? await getCallOverride(callId)
+            : await getCall(callId);
+        final status = call?['status'] as String?;
+        if (status != 'calling') {
+          debugPrint(
+            '[FCM_CALL] retry aborted: backend call state is $status (callId=$callId)',
+          );
+          return false;
+        }
+      }
+
+      try {
+        final res = invokeOverride != null
+            ? await invokeOverride('send-call-notification', body: body)
+            : await client!.functions.invoke(
+                'send-call-notification',
+                body: body,
+              );
+        if (res.status == 200 || res.status == 201) {
+          tracker?.stage('recipient_signalling_fcm');
+          debugPrint(
+            '[FCM_CALL] delivered successfully attempt=$attempt callId=$callId',
+          );
+          return true;
+        }
+        if (res.status == 400 || res.status == 401 || res.status == 403) {
+          debugPrint(
+            '[FCM_CALL] permanent status=${res.status} callId=$callId, no retry',
+          );
+          return false;
+        }
+      } on FunctionException catch (fe) {
+        if (fe.status == 400 || fe.status == 401 || fe.status == 403) {
+          debugPrint(
+            '[FCM_CALL] permanent error status=${fe.status} callId=$callId: ${fe.details}',
+          );
+          return false;
+        }
+        debugPrint(
+          '[FCM_CALL] transient function error attempt=$attempt status=${fe.status} callId=$callId: ${fe.details}',
+        );
+      } catch (e) {
+        debugPrint(
+          '[FCM_CALL] transient network error attempt=$attempt callId=$callId: $e',
+        );
+      }
+
+      if (attempt < maxAttempts) {
+        await Future.delayed(
+          retryDelayOverride ?? Duration(milliseconds: 500 * attempt),
+        );
+      }
+    }
+    return false;
   }
 }
