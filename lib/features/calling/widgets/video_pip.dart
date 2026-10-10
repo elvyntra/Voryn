@@ -13,6 +13,8 @@ class VideoPip extends StatefulWidget {
     this.userInitials = 'YOU',
     this.onTap,
     this.controlsVisible = true,
+    this.offset,
+    this.onOffsetChanged,
   });
 
   final livekit.VideoTrack? videoTrack;
@@ -23,13 +25,30 @@ class VideoPip extends StatefulWidget {
   final String userInitials;
   final VoidCallback? onTap;
   final bool controlsVisible;
+  final Offset? offset;
+  final ValueChanged<Offset>? onOffsetChanged;
 
   @override
   State<VideoPip> createState() => _VideoPipState();
 }
 
 class _VideoPipState extends State<VideoPip> {
-  Offset? _offset;
+  Offset? _currentOffset;
+  bool _isDragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentOffset = widget.offset;
+  }
+
+  @override
+  void didUpdateWidget(covariant VideoPip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.offset != null && widget.offset != _currentOffset && !_isDragging) {
+      _currentOffset = widget.offset;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +63,7 @@ class _VideoPipState extends State<VideoPip> {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: const Color(0xFF16191F),
+        color: const Color(0xFF17171a),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: Colors.white.withValues(alpha: 0.18),
@@ -59,7 +78,10 @@ class _VideoPipState extends State<VideoPip> {
         ],
       ),
       clipBehavior: Clip.antiAlias,
-      child: Stack(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(15),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
         fit: StackFit.expand,
         children: [
           if (widget.isVideoEnabled && widget.videoTrack != null)
@@ -75,7 +97,7 @@ class _VideoPipState extends State<VideoPip> {
             )
           else
             Container(
-              color: const Color(0xFF1E222B),
+              color: const Color(0xFF17171a),
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -173,29 +195,59 @@ class _VideoPipState extends State<VideoPip> {
           ),
         ],
       ),
-    );
+    ),
+  );
+
+    final mediaQuery = MediaQuery.of(context);
+    final screenSize = mediaQuery.size;
+    final padding = mediaQuery.padding;
+
+    final minRight = padding.right + 12.0;
+    final maxRight = (screenSize.width - width - padding.left - 12.0)
+        .clamp(minRight, double.infinity);
+
+    final minBottom = padding.bottom + (widget.controlsVisible ? 180.0 : 24.0);
+    final maxBottom = (screenSize.height - height - padding.top - 24.0)
+        .clamp(minBottom, double.infinity);
+
+    final cur = _currentOffset;
+    final resolvedRight = cur != null
+        ? cur.dx.clamp(minRight, maxRight)
+        : minRight;
+    final resolvedBottom = cur != null
+        ? cur.dy.clamp(minBottom, maxBottom)
+        : defaultBottom.clamp(minBottom, maxBottom);
 
     return AnimatedPositioned(
-      duration: const Duration(milliseconds: 250),
+      duration: _isDragging ? Duration.zero : const Duration(milliseconds: 200),
       curve: Curves.easeOutCubic,
-      right: _offset?.dx ?? 18,
-      bottom: _offset?.dy ?? defaultBottom,
-      child: Tooltip(
-        message: 'Tap to swap view',
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onTap,
-          onPanUpdate: (details) {
-            setState(() {
-              final current = _offset ?? Offset(18, defaultBottom);
-              _offset = Offset(
-                (current.dx - details.delta.dx).clamp(12.0, 240.0),
-                (current.dy - details.delta.dy).clamp(24.0, 560.0),
-              );
-            });
-          },
-          child: pipWidget,
-        ),
+      right: resolvedRight,
+      bottom: resolvedBottom,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onPanStart: (_) {
+          _isDragging = true;
+          _currentOffset = Offset(resolvedRight, resolvedBottom);
+          setState(() {});
+        },
+        onPanUpdate: (details) {
+          final curDx = _currentOffset?.dx ?? resolvedRight;
+          final curDy = _currentOffset?.dy ?? resolvedBottom;
+          final nextDx = (curDx - details.delta.dx).clamp(minRight, maxRight);
+          final nextDy = (curDy - details.delta.dy).clamp(minBottom, maxBottom);
+          final nextOffset = Offset(nextDx, nextDy);
+          _currentOffset = nextOffset;
+          setState(() {});
+          widget.onOffsetChanged?.call(nextOffset);
+        },
+        onPanEnd: (_) {
+          setState(() => _isDragging = false);
+        },
+        onPanCancel: () {
+          setState(() => _isDragging = false);
+        },
+        child: pipWidget,
       ),
     );
   }

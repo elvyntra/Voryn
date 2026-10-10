@@ -73,6 +73,9 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
   bool _markedActive = false;
   bool _controlsVisible = true;
   bool _isLocalDominant = false;
+  bool _isSplitScreen = false;
+  Offset? _pipOffset;
+  bool _held = false;
 
   void _toggleControls() {
     if (!mounted) return;
@@ -82,6 +85,11 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
   void _toggleVideoSwap() {
     if (!mounted) return;
     setState(() => _isLocalDominant = !_isLocalDominant);
+  }
+
+  void _toggleSplitScreen() {
+    if (!mounted) return;
+    setState(() => _isSplitScreen = !_isSplitScreen);
   }
 
   void _notifyCallActive() {
@@ -165,6 +173,24 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
   void _onMultiCallChanged() {
     if (!mounted || _ending || _ended) return;
     final activeId = MultiCallCoordinator.instance.activeCallId;
+    if (activeId != null && MultiCallCoordinator.instance.isConference(activeId)) {
+      _coordinator.isTransitioning = true;
+      _detachRoomListener();
+      _coordinator.detachScreen();
+      final confSession =
+          MultiCallCoordinator.instance.sessionsByCallId[activeId] ??
+          _coordinator.session;
+      context.pushReplacement(
+        '/group-call/$activeId',
+        extra: {
+          'session': confSession,
+          'title': 'Conference',
+          'initialDuration': _coordinator.currentDuration,
+          'isInitiator': MultiCallCoordinator.instance.isCallInitiator(activeId),
+        },
+      );
+      return;
+    }
     if (activeId != null &&
         activeId != widget.callId &&
         MultiCallCoordinator.instance.heldCallId == widget.callId) {
@@ -181,7 +207,19 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
       );
       return;
     }
-    if (mounted) setState(() {});
+    if (mounted) {
+      final mergeError = MultiCallCoordinator.instance.mergeErrorNotifier.value;
+      if (mergeError != null) {
+        MultiCallCoordinator.instance.mergeErrorNotifier.value = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(mergeError),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      setState(() {});
+    }
   }
 
   Future<void> _start() async {
@@ -232,6 +270,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
         speakerEnabled: true,
       );
       _isConnected = true;
+      _callStatusText = '';
       if (_cameraEnabledNotifier.value) {
         await _session?.setCameraEnabled(true);
       }
@@ -272,6 +311,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
       _attachRoomListener();
       if (_session!.room.remoteParticipants.isNotEmpty) {
         _isConnected = true;
+        _callStatusText = '';
         _notifyCallActive();
         _startTimer();
         await _latencyTracker?.stage('backend_accept_start');
@@ -286,7 +326,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
     } catch (e) {
       debugPrint('[CALL ${widget.callId}] connect fallback / mock mode: $e');
       _isConnected = true;
-      _callStatusText = 'Connected';
+      _callStatusText = '';
       _notifyCallActive();
       _startTimer();
       await _latencyTracker?.stage('call_connected_ui');
@@ -325,6 +365,9 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
       if (mounted) setState(() {});
     } else if (status == 'ringing' && !_isConnected) {
       _callStatusText = 'Ringing…';
+      if (mounted) setState(() {});
+    } else if (status == 'reconnecting') {
+      _callStatusText = 'Reconnecting…';
       if (mounted) setState(() {});
     }
   }
@@ -377,25 +420,27 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
     final room = _session?.room;
     if (room == null) return;
 
-    if (room.remoteParticipants.isNotEmpty && !_isConnected) {
-      _isConnected = true;
-      _notifyCallActive();
+    if (room.remoteParticipants.isNotEmpty) {
+      if (!_isConnected) {
+        _isConnected = true;
+        _notifyCallActive();
+        _startTimer();
+        unawaited(_latencyTracker?.stage('backend_accept_start'));
+        unawaited(
+          const VorynCallService().setConnected(widget.callId).then((_) {
+            _latencyTracker?.stage('backend_accept_done');
+          }),
+        );
+        unawaited(_latencyTracker?.stage('call_connected_ui'));
+        unawaited(
+          LockScreenService.isKeyguardLocked().then((isLocked) {
+            debugPrint(
+              '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
+            );
+          }),
+        );
+      }
       _callStatusText = '';
-      _startTimer();
-      unawaited(_latencyTracker?.stage('backend_accept_start'));
-      unawaited(
-        const VorynCallService().setConnected(widget.callId).then((_) {
-          _latencyTracker?.stage('backend_accept_done');
-        }),
-      );
-      unawaited(_latencyTracker?.stage('call_connected_ui'));
-      unawaited(
-        LockScreenService.isKeyguardLocked().then((isLocked) {
-          debugPrint(
-            '[CALL_LATENCY] call_connected_ui keyguardLocked=$isLocked',
-          );
-        }),
-      );
       if (mounted) setState(() {});
     }
 
@@ -534,10 +579,87 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
     await _session?.setScreenShareEnabled(next);
   }
 
+  Future<void> _toggleHold() async {
+    if (_ending || _ended) return;
+    final next = !_held;
+    if (mounted) setState(() => _held = next);
+    await const VorynCallService().setCallHoldState(widget.callId, next);
+    if (next) {
+      await _session?.hold();
+    } else {
+      await _session?.resume(
+        restoreMic: !_mutedNotifier.value,
+        restoreCamera: _cameraEnabledNotifier.value,
+      );
+    }
+  }
+
+  Widget _buildPersistentStatusPill() {
+    final isRemoteHeld =
+        MultiCallCoordinator.instance.isCallHeldByRemote(widget.callId);
+    final String statusText;
+    if (isRemoteHeld) {
+      statusText = 'You are on hold';
+    } else if (_held) {
+      statusText = 'Call on hold';
+    } else if (_loading) {
+      statusText = 'Connecting…';
+    } else if (!_isConnected) {
+      statusText = _callStatusText;
+    } else if (_callStatusText.isNotEmpty &&
+        _callStatusText != 'Calling…' &&
+        _callStatusText != 'Ringing…' &&
+        _callStatusText != 'Connected') {
+      statusText = _callStatusText;
+    } else {
+      return const SizedBox.shrink();
+    }
+
+    if (statusText.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      key: const Key('persistent_call_status_pill'),
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.2),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: (statusText.contains('Reconnecting') || isRemoteHeld || _held)
+                  ? const Color(0xFFEF4444)
+                  : const Color(0xFFFBBF24),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            statusText,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openAudioRoutes() {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF16191E),
+      backgroundColor: const Color(0xFF17171a),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -741,7 +863,7 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF1A1D24), Color(0xFF0C0E12)],
+          colors: [Color(0xFF17171a), Color(0xFF0b0b0d)],
         ),
       ),
       child: Center(
@@ -777,6 +899,75 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
     );
   }
 
+  Widget _buildSplitScreenStage({
+    required livekit.VideoTrack? remoteTrack,
+    required livekit.VideoTrack? localTrack,
+    required bool cameraEnabled,
+    required String primaryName,
+  }) {
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
+
+    final remoteWidget = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleControls,
+      child: Container(
+        color: Colors.black,
+        child: remoteTrack != null
+            ? livekit.VideoTrackRenderer(
+                remoteTrack,
+                key: ValueKey(
+                  'split_remote_${remoteTrack.sid ?? remoteTrack.hashCode}_$_rendererRevision',
+                ),
+                fit: livekit.VideoViewFit.cover,
+              )
+            : _buildDominantPlaceholder(
+                isLocal: false,
+                remoteName: primaryName,
+                cameraEnabled: cameraEnabled,
+              ),
+      ),
+    );
+
+    final localWidget = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleControls,
+      child: Container(
+        color: Colors.black,
+        child: (cameraEnabled && localTrack != null)
+            ? livekit.VideoTrackRenderer(
+                localTrack,
+                key: ValueKey(
+                  'split_local_${localTrack.sid ?? localTrack.hashCode}_$_rendererRevision',
+                ),
+                mirrorMode: livekit.VideoViewMirrorMode.mirror,
+                fit: livekit.VideoViewFit.cover,
+              )
+            : _buildDominantPlaceholder(
+                isLocal: true,
+                remoteName: primaryName,
+                cameraEnabled: cameraEnabled,
+              ),
+      ),
+    );
+
+    return isLandscape
+        ? Row(
+            children: [
+              Expanded(child: remoteWidget),
+              Container(width: 2, color: Colors.white24),
+              Expanded(child: localWidget),
+            ],
+          )
+        : Column(
+            children: [
+              Expanded(child: remoteWidget),
+              Container(height: 2, color: Colors.white24),
+              Expanded(child: localWidget),
+            ],
+          );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_ended) {
@@ -796,10 +987,19 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Dominant Video Stage (Tapping toggles controls)
+            // Video Stage (50/50 Split or Dominant Video)
             ValueListenableBuilder<bool>(
               valueListenable: _cameraEnabledNotifier,
               builder: (context, cameraEnabled, _) {
+                if (_isSplitScreen) {
+                  return _buildSplitScreenStage(
+                    remoteTrack: remoteTrack,
+                    localTrack: localTrack,
+                    cameraEnabled: cameraEnabled,
+                    primaryName: primaryName,
+                  );
+                }
+
                 final dominantTrack = _isLocalDominant ? localTrack : remoteTrack;
                 final isDominantLocal = _isLocalDominant;
                 final isDominantActive = isDominantLocal
@@ -899,6 +1099,8 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
                         ignoring: !_controlsVisible,
                         child: CallTopBar(
                           onMinimize: _minimize,
+                          onToggleLayout: _toggleSplitScreen,
+                          isSplitScreen: _isSplitScreen,
                           centerWidget: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -997,6 +1199,10 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
                     ),
                   ),
 
+                  // Persistent Critical State Pill (Visible when normal controls are hidden)
+                  if (!_controlsVisible)
+                    _buildPersistentStatusPill(),
+
                   // Multi-Call Waiting Banner (Persistent in all visibility states)
                   if (MultiCallCoordinator.instance.hasWaitingCall)
                     CallWaitingBanner(
@@ -1033,9 +1239,14 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
                     HeldCallBar(
                       heldContactName: 'Other Call',
                       isLoading:
-                          MultiCallCoordinator.instance.isTransitionInFlight,
+                          MultiCallCoordinator.instance.isTransitionInFlight &&
+                          !MultiCallCoordinator.instance.isMerging,
+                      isMerging: MultiCallCoordinator.instance.isMerging,
                       onSwitch: () async {
                         await MultiCallCoordinator.instance.switchCalls();
+                      },
+                      onMerge: () async {
+                        await MultiCallCoordinator.instance.mergeCalls();
                       },
                     ),
 
@@ -1054,34 +1265,37 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
               ),
             ),
 
-            // Floating Picture-in-Picture Video Preview (Swappable & interactive)
-            ListenableBuilder(
-              listenable: Listenable.merge([
-                _cameraEnabledNotifier,
-                _mutedNotifier,
-              ]),
-              builder: (context, _) {
-                final pipTrack = _isLocalDominant ? remoteTrack : localTrack;
-                final pipEnabled = _isLocalDominant
-                    ? (remoteTrack != null)
-                    : _cameraEnabledNotifier.value;
-                final isPipLocal = !_isLocalDominant;
+            // Floating Picture-in-Picture Video Preview (Hidden in 50/50 Split mode)
+            if (!_isSplitScreen)
+              ListenableBuilder(
+                listenable: Listenable.merge([
+                  _cameraEnabledNotifier,
+                  _mutedNotifier,
+                ]),
+                builder: (context, _) {
+                  final pipTrack = _isLocalDominant ? remoteTrack : localTrack;
+                  final pipEnabled = _isLocalDominant
+                      ? (remoteTrack != null)
+                      : _cameraEnabledNotifier.value;
+                  final isPipLocal = !_isLocalDominant;
 
-                return VideoPip(
-                  key: ValueKey(
-                    'pip_${pipTrack?.sid ?? pipTrack.hashCode}_$_rendererRevision',
-                  ),
-                  videoTrack: pipTrack,
-                  isMirror: isPipLocal,
-                  isMuted: isPipLocal ? _mutedNotifier.value : false,
-                  isVideoEnabled: pipEnabled,
-                  label: isPipLocal ? 'You' : primaryName,
-                  userInitials: isPipLocal ? 'YOU' : _user.initials,
-                  controlsVisible: _controlsVisible,
-                  onTap: _toggleVideoSwap,
-                );
-              },
-            ),
+                  return VideoPip(
+                    key: const Key('active_video_call_pip'),
+                    videoTrack: pipTrack,
+                    isMirror: isPipLocal,
+                    isMuted: isPipLocal ? _mutedNotifier.value : false,
+                    isVideoEnabled: pipEnabled,
+                    label: isPipLocal ? 'You' : primaryName,
+                    userInitials: isPipLocal ? 'YOU' : _user.initials,
+                    controlsVisible: _controlsVisible,
+                    offset: _pipOffset,
+                    onOffsetChanged: (newOffset) {
+                      _pipOffset = newOffset;
+                    },
+                    onTap: _toggleVideoSwap,
+                  );
+                },
+              ),
 
             // Bottom Controls Overlay (animated hide/show)
             SafeArea(
@@ -1184,6 +1398,15 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
                                   icon: Icons.volume_up_rounded,
                                   label: 'Speaker',
                                   onTap: _openAudioRoutes,
+                                ),
+                                CallControlButton(
+                                  icon: _held
+                                      ? Icons.play_arrow_rounded
+                                      : Icons.pause_rounded,
+                                  label: _held ? 'Resume' : 'Hold',
+                                  isActive: _held,
+                                  activeColor: colors.accent,
+                                  onTap: _toggleHold,
                                 ),
                                 ValueListenableBuilder<bool>(
                                   valueListenable: _screenSharingNotifier,

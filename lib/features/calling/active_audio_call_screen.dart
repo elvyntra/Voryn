@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart' as livekit;
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/backend/voryn_backend.dart';
 import '../../core/notifications/lock_screen_service.dart';
@@ -9,6 +12,7 @@ import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_presence.dart';
 import '../connect/mock_voryn_state.dart';
 import '../connect/user_interaction_screens.dart';
+import 'models/video_upgrade_models.dart';
 import 'multi_call_coordinator.dart';
 import 'voryn_call_history_service.dart';
 import 'voryn_call_latency_tracker.dart';
@@ -22,6 +26,7 @@ import 'widgets/call_top_bar.dart';
 import 'widgets/call_waiting_banner.dart';
 import 'widgets/call_waveform.dart';
 import 'widgets/held_call_bar.dart';
+import 'widgets/video_upgrade_prompt.dart';
 
 class ActiveAudioCallScreen extends StatefulWidget {
   const ActiveAudioCallScreen({
@@ -45,7 +50,8 @@ class ActiveAudioCallScreen extends StatefulWidget {
   State<ActiveAudioCallScreen> createState() => _ActiveAudioCallScreenState();
 }
 
-class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
+class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
+    with WidgetsBindingObserver {
   late VorynMockUser _user;
   late final VorynCallRuntimeCoordinator _coordinator;
   VorynCallLatencyTracker? _latencyTracker;
@@ -70,6 +76,28 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   bool _remoteHadVideo = false;
   livekit.EventsListener<livekit.RoomEvent>? _roomEventListener;
 
+  bool _isRequestingVideo = false;
+  String? _outgoingUpgradeRequestId;
+  Timer? _upgradeTimeoutTimer;
+  Timer? _upgradePollTimer;
+  VideoUpgradeRequest? _incomingUpgradeRequest;
+  Timer? _incomingUpgradeTimer;
+  Timer? _incomingUpgradePollTimer;
+
+  void _sendLiveKitUpgradeSignal(String type, {String? requestId}) {
+    try {
+      final participant = _session?.room.localParticipant;
+      if (participant != null) {
+        final payload = jsonEncode({
+          'type': type,
+          'requestId': requestId ?? '',
+          'callId': widget.callId,
+        });
+        unawaited(participant.publishData(utf8.encode(payload), reliable: true));
+      }
+    } catch (_) {}
+  }
+
   void _notifyCallActive() {
     if (_markedActive) return;
     _markedActive = true;
@@ -85,6 +113,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _muted = widget.initialMuted;
     _speakerOn = widget.initialSpeakerOn;
     debugPrint('[CALL_ROUTE] active route initState');
@@ -103,6 +132,8 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       screenKey: this,
       onStatusChanged: _handleRealtimeStatus,
       onRouteExit: _handleRouteExit,
+      onVideoUpgradeRequested: _handleIncomingVideoUpgrade,
+      onVideoUpgradeStatusChanged: _handleVideoUpgradeStatusChanged,
     );
 
     debugPrint('[LOCKSCREEN] accept');
@@ -124,11 +155,30 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         );
 
     _start();
+    unawaited(_checkActiveVideoUpgrade());
   }
 
   void _onMultiCallChanged() {
     if (!mounted || _ending || _ended) return;
     final activeId = MultiCallCoordinator.instance.activeCallId;
+    if (activeId != null && MultiCallCoordinator.instance.isConference(activeId)) {
+      _coordinator.isTransitioning = true;
+      _detachRoomListener();
+      _coordinator.detachScreen();
+      final confSession =
+          MultiCallCoordinator.instance.sessionsByCallId[activeId] ??
+          _coordinator.session;
+      context.pushReplacement(
+        '/group-call/$activeId',
+        extra: {
+          'session': confSession,
+          'title': 'Conference',
+          'initialDuration': _coordinator.currentDuration,
+          'isInitiator': MultiCallCoordinator.instance.isCallInitiator(activeId),
+        },
+      );
+      return;
+    }
     if (activeId != null &&
         activeId != widget.callId &&
         MultiCallCoordinator.instance.heldCallId == widget.callId) {
@@ -145,7 +195,19 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       );
       return;
     }
-    if (mounted) setState(() {});
+    if (mounted) {
+      final mergeError = MultiCallCoordinator.instance.mergeErrorNotifier.value;
+      if (mergeError != null) {
+        MultiCallCoordinator.instance.mergeErrorNotifier.value = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(mergeError),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      setState(() {});
+    }
   }
 
   Future<void> _start() async {
@@ -263,6 +325,11 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (mounted) {
       setState(() => _loading = false);
     }
+    _incomingUpgradePollTimer?.cancel();
+    _incomingUpgradePollTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) async {
+      if (!mounted || _ending || _ended || _isRequestingVideo || _incomingUpgradeRequest != null) return;
+      _checkActiveVideoUpgrade();
+    });
   }
 
   void _handleRealtimeStatus(String status, [String? heldBy]) {
@@ -331,7 +398,32 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         setState(() => _callStatusText = _isConnected ? '' : 'Connected');
       })
       ..on<livekit.TrackSubscribedEvent>((_) => _onRoomChanged())
-      ..on<livekit.TrackUnsubscribedEvent>((_) => _onRoomChanged());
+      ..on<livekit.TrackUnsubscribedEvent>((_) => _onRoomChanged())
+      ..on<livekit.DataReceivedEvent>((event) {
+        try {
+          final payload = jsonDecode(utf8.decode(event.data));
+          if (payload is Map && mounted) {
+            final type = payload['type'] as String?;
+            final reqId = payload['requestId'] as String? ?? '';
+            final eventCallId = payload['callId'] as String? ?? '';
+            if (eventCallId != widget.callId) return;
+
+            if (type == 'video_upgrade_requested') {
+              _checkActiveVideoUpgrade();
+            } else if (type == 'video_upgrade_accepted') {
+              _verifyAndHandleAuthoritativeAcceptance(reqId);
+            } else if (type == 'video_upgrade_declined') {
+              if (reqId == _outgoingUpgradeRequestId) {
+                _handleVideoUpgradeStatusChanged(reqId, VideoUpgradeStatus.declined);
+              }
+            } else if (type == 'video_upgrade_cancelled') {
+              if (reqId == _incomingUpgradeRequest?.id) {
+                _handleVideoUpgradeStatusChanged(reqId, VideoUpgradeStatus.cancelled);
+              }
+            }
+          }
+        } catch (_) {}
+      });
   }
 
   void _detachRoomListener() {
@@ -508,28 +600,292 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
     if (mounted) setState(() => _speakerOn = next);
   }
 
-  void _switchToVideo() async {
-    if (_ending || _ended) return;
+  Future<void> _checkActiveVideoUpgrade() async {
+    try {
+      final req = await const VorynCallService().getActiveVideoUpgradeRequest(widget.callId);
+      if (req != null && mounted) {
+        final currentUid = VorynBackend.client?.auth.currentUser?.id;
+        if (req.requestedBy == currentUid) {
+          setState(() {
+            _isRequestingVideo = true;
+            _outgoingUpgradeRequestId = req.id;
+          });
+          final remaining = req.expiresAt.difference(DateTime.now()).inSeconds;
+          if (remaining > 0) {
+            _upgradeTimeoutTimer?.cancel();
+            _upgradeTimeoutTimer = Timer(Duration(seconds: remaining), () {
+              if (mounted && _isRequestingVideo) {
+                setState(() {
+                  _isRequestingVideo = false;
+                  _outgoingUpgradeRequestId = null;
+                });
+              }
+            });
+          }
+        } else if (req.targetUserUid == currentUid || (req.targetUserUid.isEmpty && req.requestedBy != currentUid)) {
+          _handleIncomingVideoUpgrade(req);
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _handleIncomingVideoUpgrade(VideoUpgradeRequest req) {
+    if (!mounted || _ending || _ended) return;
+    final currentUid = VorynBackend.client?.auth.currentUser?.id;
+    if (req.requestedBy == currentUid) return;
+    if (req.targetUserUid.isNotEmpty && currentUid != null && req.targetUserUid != currentUid) return;
+
+    _incomingUpgradeTimer?.cancel();
+    setState(() {
+      _incomingUpgradeRequest = req;
+    });
+    final remainingSec = req.expiresAt.difference(DateTime.now()).inSeconds;
+    final timeout = remainingSec > 0 ? remainingSec : 30;
+    _incomingUpgradeTimer = Timer(Duration(seconds: timeout), () {
+      if (mounted && _incomingUpgradeRequest?.id == req.id) {
+        setState(() {
+          _incomingUpgradeRequest = null;
+        });
+      }
+    });
+  }
+
+  void _handleVideoUpgradeStatusChanged(String requestId, VideoUpgradeStatus status) {
+    if (!mounted || _ending || _ended) return;
+    debugPrint('[CALL ${widget.callId}] video upgrade status changed: req=$requestId status=$status');
+    if (status == VideoUpgradeStatus.accepted) {
+      _upgradeTimeoutTimer?.cancel();
+      _upgradePollTimer?.cancel();
+      _incomingUpgradeTimer?.cancel();
+      _incomingUpgradePollTimer?.cancel();
+      final wasInitiator = _outgoingUpgradeRequestId == requestId || _isRequestingVideo;
+      setState(() {
+        _isRequestingVideo = false;
+        _outgoingUpgradeRequestId = null;
+        _incomingUpgradeRequest = null;
+      });
+      _transitionToVideoCall(isInitiator: wasInitiator);
+    } else if (status == VideoUpgradeStatus.declined) {
+      _upgradeTimeoutTimer?.cancel();
+      _upgradePollTimer?.cancel();
+      if (_isRequestingVideo) {
+        setState(() {
+          _isRequestingVideo = false;
+          _outgoingUpgradeRequestId = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Video request declined.'),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } else if (status == VideoUpgradeStatus.cancelled) {
+      _incomingUpgradeTimer?.cancel();
+      if (_incomingUpgradeRequest != null) {
+        setState(() {
+          _incomingUpgradeRequest = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Video request was cancelled.'),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } else if (status == VideoUpgradeStatus.expired) {
+      _upgradeTimeoutTimer?.cancel();
+      _upgradePollTimer?.cancel();
+      _incomingUpgradeTimer?.cancel();
+      setState(() {
+        _isRequestingVideo = false;
+        _outgoingUpgradeRequestId = null;
+        _incomingUpgradeRequest = null;
+      });
+    }
+  }
+
+  Future<void> _verifyAndHandleAuthoritativeAcceptance(String reqId) async {
+    if (!mounted || !_isRequestingVideo || _ending || _ended) return;
+    if (reqId.isEmpty || reqId != _outgoingUpgradeRequestId) return;
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+      if (!mounted || !_isRequestingVideo) return;
+      final req = await const VorynCallService().getActiveVideoUpgradeRequest(widget.callId);
+      if (req != null && req.id == reqId && req.status == VideoUpgradeStatus.accepted) {
+        _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.accepted);
+        return;
+      }
+      if (attempt == 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+    }
+  }
+
+  Future<void> _initiateVideoUpgrade() async {
+    if (_ending || _ended || _isRequestingVideo) return;
+    if (_held || MultiCallCoordinator.instance.isCallHeldByRemote(widget.callId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot upgrade to video while call is on hold.'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _isRequestingVideo = true;
+    });
+
+    final result = await const VorynCallService().requestVideoUpgrade(widget.callId);
+    if (!mounted || _ending || _ended) return;
+
+    if (!result.isSuccess) {
+      setState(() {
+        _isRequestingVideo = false;
+        _outgoingUpgradeRequestId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.errorMessage ?? 'Could not request video upgrade.'),
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    if (result.coalesced || result.status == VideoUpgradeStatus.accepted) {
+      setState(() {
+        _isRequestingVideo = false;
+        _outgoingUpgradeRequestId = null;
+      });
+      _sendLiveKitUpgradeSignal('video_upgrade_accepted', requestId: result.requestId);
+      await _transitionToVideoCall(isInitiator: true);
+      return;
+    }
+
+    _outgoingUpgradeRequestId = result.requestId;
+    _sendLiveKitUpgradeSignal('video_upgrade_requested', requestId: result.requestId);
+
+    _upgradeTimeoutTimer?.cancel();
+    _upgradeTimeoutTimer = Timer(const Duration(seconds: 30), () {
+      if (mounted && _isRequestingVideo) {
+        _upgradePollTimer?.cancel();
+        setState(() {
+          _isRequestingVideo = false;
+          _outgoingUpgradeRequestId = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Video request timed out.'),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    });
+
+    // Periodic polling fallback to detect acceptance if Realtime broadcast is delayed
+    _upgradePollTimer?.cancel();
+    _upgradePollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) async {
+      if (!mounted || !_isRequestingVideo || _ending || _ended) {
+        _upgradePollTimer?.cancel();
+        return;
+      }
+      final req = await const VorynCallService().getActiveVideoUpgradeRequest(widget.callId);
+      if (req != null && mounted && _isRequestingVideo) {
+        if (req.status == VideoUpgradeStatus.accepted) {
+          _upgradePollTimer?.cancel();
+          _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.accepted);
+        } else if (req.status == VideoUpgradeStatus.declined) {
+          _upgradePollTimer?.cancel();
+          _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.declined);
+        } else if (req.status == VideoUpgradeStatus.cancelled || req.status == VideoUpgradeStatus.expired) {
+          _upgradePollTimer?.cancel();
+          _handleVideoUpgradeStatusChanged(req.id, req.status);
+        }
+      }
+    });
+  }
+
+  Future<void> _cancelVideoUpgrade() async {
+    if (!_isRequestingVideo) return;
+    _upgradeTimeoutTimer?.cancel();
+    _upgradePollTimer?.cancel();
+    final reqId = _outgoingUpgradeRequestId;
+    setState(() {
+      _isRequestingVideo = false;
+      _outgoingUpgradeRequestId = null;
+    });
+    _sendLiveKitUpgradeSignal('video_upgrade_cancelled', requestId: reqId);
+    if (reqId != null) {
+      await const VorynCallService().cancelVideoUpgrade(reqId, callId: widget.callId);
+    }
+  }
+
+  Future<void> _respondToVideoUpgrade(bool accept) async {
+    final req = _incomingUpgradeRequest;
+    if (req == null) return;
+    _incomingUpgradeTimer?.cancel();
+    _incomingUpgradePollTimer?.cancel();
+    setState(() {
+      _incomingUpgradeRequest = null;
+    });
+
+    final ok = await const VorynCallService().respondVideoUpgrade(
+      req.id,
+      accept,
+      callId: widget.callId,
+    );
+    if (!ok) return;
+
+    _sendLiveKitUpgradeSignal(
+      accept ? 'video_upgrade_accepted' : 'video_upgrade_declined',
+      requestId: req.id,
+    );
+
+    if (accept && mounted) {
+      await _transitionToVideoCall(isInitiator: false);
+    }
+  }
+
+  Future<void> _transitionToVideoCall({required bool isInitiator}) async {
+    if (_ending || _ended || !mounted) return;
     _coordinator.isTransitioning = true;
     MultiCallCoordinator.instance.recordCallType(widget.callId, 'video');
 
-    bool cameraOk = true;
-    if (_session != null) {
-      cameraOk = await _session!.setCameraEnabled(true);
-      if (!cameraOk && mounted) {
-        _coordinator.isTransitioning = false;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not access camera. Audio call remains active.'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-        return;
+    bool cameraOk = false;
+    try {
+      bool hasPermission = true;
+      if (!kIsWeb) {
+        final status = await Permission.camera.request();
+        hasPermission = status.isGranted;
       }
+      if (hasPermission && _session != null) {
+        cameraOk = await _session!.setCameraEnabled(true);
+      }
+    } catch (e) {
+      debugPrint('[VIDEO_UPGRADE] camera init error: $e');
+      cameraOk = false;
+    }
+
+    if (!cameraOk && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Camera permission denied. Joined video call with camera off.'),
+          duration: Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
 
     await _coordinator.prepareForVideoUpgrade();
     _detachRoomListener();
+    _coordinator.detachScreen(this);
     if (!mounted) return;
     context.pushReplacement(
       '/active-video-call/${widget.callId}',
@@ -648,15 +1004,27 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: const Color(0xFF16191E),
+      backgroundColor: const Color(0xFF17171a),
       builder: (_) => QuickMessageSheet(user: _user),
     );
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted && !_ending && !_ended) {
+      unawaited(_checkActiveVideoUpgrade());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     MultiCallCoordinator.instance.removeListener(_onMultiCallChanged);
     _timer?.cancel();
+    _upgradeTimeoutTimer?.cancel();
+    _upgradePollTimer?.cancel();
+    _incomingUpgradeTimer?.cancel();
+    _incomingUpgradePollTimer?.cancel();
     _detachRoomListener();
     _durationNotifier.dispose();
     if (_coordinator.isScreenActive(this) &&
@@ -678,7 +1046,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
   @override
   Widget build(BuildContext context) {
     if (_ended) {
-      return const Scaffold(backgroundColor: Color(0xFF0D0F12));
+      return const Scaffold(backgroundColor: Color(0xFF0b0b0d));
     }
     debugPrint('[BOOT] ActiveAudioCallScreen build');
     final colors = context.vorynColors;
@@ -691,7 +1059,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
         : _user.id;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0F12),
+      backgroundColor: const Color(0xFF0b0b0d),
       body: AbsorbPointer(
         absorbing: _ending || _ended,
         child: SafeArea(
@@ -750,10 +1118,29 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                 HeldCallBar(
                   heldContactName: 'Other Call',
                   isLoading:
-                      MultiCallCoordinator.instance.isTransitionInFlight,
+                      MultiCallCoordinator.instance.isTransitionInFlight &&
+                      !MultiCallCoordinator.instance.isMerging,
+                  isMerging: MultiCallCoordinator.instance.isMerging,
                   onSwitch: () async {
                     await MultiCallCoordinator.instance.switchCalls();
                   },
+                  onMerge: () async {
+                    await MultiCallCoordinator.instance.mergeCalls();
+                  },
+                ),
+
+              // Video Upgrade Waiting Banner (Requester)
+              if (_isRequestingVideo)
+                VideoUpgradeWaitingBanner(
+                  onCancel: _cancelVideoUpgrade,
+                ),
+
+              // Video Upgrade Approval Prompt Card (Receiver)
+              if (_incomingUpgradeRequest != null)
+                VideoUpgradePromptCard(
+                  callerName: _user.name,
+                  onAccept: () => _respondToVideoUpgrade(true),
+                  onDecline: () => _respondToVideoUpgrade(false),
                 ),
 
               Expanded(
@@ -780,7 +1167,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                                     color: const Color(0xFF22C55E),
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: const Color(0xFF0D0F12),
+                                      color: const Color(0xFF0b0b0d),
                                       width: 2.5,
                                     ),
                                   ),
@@ -882,7 +1269,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                                     !_loading &&
                                     !MultiCallCoordinator.instance
                                         .isCallHeldByRemote(widget.callId),
-                                color: const Color(0xFFA78BFA),
+                                color: const Color(0xFF008F66),
                               ),
 
                               const Spacer(flex: 3),
@@ -918,8 +1305,10 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen> {
                                   ),
                                   CallControlButton(
                                     icon: Icons.videocam_outlined,
-                                    label: 'Video',
-                                    onTap: _switchToVideo,
+                                    label: _isRequestingVideo ? 'Pending…' : 'Video',
+                                    isActive: _isRequestingVideo,
+                                    activeColor: colors.accent,
+                                    onTap: _isRequestingVideo ? _cancelVideoUpgrade : _initiateVideoUpgrade,
                                   ),
                                   CallControlButton(
                                     icon: _muted
