@@ -49,9 +49,9 @@ class _VorynButtonState extends State<VorynButton> {
       _hovered,
     )) {
       (true, true, _, _) => colors.disabled,
-      (true, false, true, _) => colors.accentViolet,
-      (true, false, false, true) => colors.accentViolet,
-      (true, false, false, false) => colors.accent,
+      (true, false, true, _) => colors.deepEmerald,
+      (true, false, false, true) => colors.forestGreen,
+      (true, false, false, false) => colors.primaryEmerald,
       (false, true, _, _) => colors.surface,
       (false, false, true, _) => colors.surfacePressed,
       (false, false, false, true) => colors.surfacePressed,
@@ -59,7 +59,7 @@ class _VorynButtonState extends State<VorynButton> {
     };
     final foreground = widget.isDisabled
         ? colors.textMuted
-        : colors.textPrimary;
+        : (isPrimary ? Colors.white : colors.textPrimary);
 
     return Semantics(
       button: true,
@@ -96,15 +96,7 @@ class _VorynButtonState extends State<VorynButton> {
               border: Border.all(
                 color: isPrimary ? Colors.transparent : colors.border,
               ),
-              boxShadow: isPrimary && !widget.isDisabled
-                  ? [
-                      BoxShadow(
-                        color: colors.accent.withValues(alpha: 0.28),
-                        blurRadius: 24,
-                        offset: const Offset(0, 10),
-                      ),
-                    ]
-                  : null,
+              boxShadow: null,
             ),
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 140),

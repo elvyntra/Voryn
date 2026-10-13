@@ -260,7 +260,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: const Color(0xFF16191E),
+      backgroundColor: const Color(0xFF17171a),
       builder: (_) => QuickMessageSheet(user: _user),
     );
   }
@@ -268,7 +268,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   @override
   Widget build(BuildContext context) {
     if (_resolved) {
-      return const Scaffold(backgroundColor: Color(0xFF0D0F12));
+      return const Scaffold(backgroundColor: Color(0xFF0b0b0d));
     }
     final activeSnapshot =
         VorynActiveCallPresentationService.instance.currentSnapshot;
@@ -282,7 +282,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _exitSafely();
       });
-      return const Scaffold(backgroundColor: Color(0xFF0D0F12));
+      return const Scaffold(backgroundColor: Color(0xFF0b0b0d));
     }
 
     debugPrint('[BOOT] IncomingCallScreen build');
@@ -296,7 +296,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
         : _user.id;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0F12),
+      backgroundColor: const Color(0xFF0b0b0d),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -320,10 +320,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1E222A),
+                    color: const Color(0xFF17171a),
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: const Color(0xFF0D0F12),
+                      color: const Color(0xFF0b0b0d),
                       width: 2,
                     ),
                   ),
@@ -482,8 +482,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                           ? Icons.videocam_rounded
                           : Icons.call_rounded,
                       label: 'Accept',
-                      color: const Color(0xFF16A34A),
-                      glowColor: const Color(0xFF16A34A).withValues(alpha: 0.4),
+                      color: const Color(0xFF008F66),
+                      glowColor: const Color(0xFF008F66).withValues(alpha: 0.4),
                       onTap: _accept,
                     ),
                   ],
@@ -529,7 +529,7 @@ class _PillAction extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF16191E),
+          color: const Color(0xFF17171a),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         ),

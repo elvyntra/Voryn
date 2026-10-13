@@ -1,11 +1,11 @@
 {
-    "name": "Voryn",
-    "short_name": "Voryn",
+    "name": "VoRyn",
+    "short_name": "VoRyn",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0A0D18",
-    "theme_color": "#0A0D18",
-    "description": "Voryn - Private, high-fidelity audio and video communication.",
+    "background_color": "#0B0B0D",
+    "theme_color": "#008F66",
+    "description": "VoRyn - Private, high-fidelity audio and video communication.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

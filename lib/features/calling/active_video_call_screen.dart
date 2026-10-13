@@ -61,6 +61,8 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
 
   livekit.VideoTrack? _remoteTrack;
   livekit.VideoTrack? _localTrack;
+  livekit.VideoTrack? _remoteScreenTrack;
+  livekit.VideoTrack? _localScreenTrack;
   int _rendererRevision = 0;
   livekit.EventsListener<livekit.RoomEvent>? _roomEventListener;
 
@@ -116,13 +118,24 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
     if (!mounted) return;
     final nextRemote = _session?.remoteVideoTrack;
     final nextLocal = _session?.localVideoTrack;
-    if (forceRebind || nextRemote != _remoteTrack || nextLocal != _localTrack) {
+    final nextRemoteScreen = _session?.remoteScreenShareTrack;
+    final nextLocalScreen = _session?.localScreenShareTrack;
+    if (nextLocalScreen == null && _screenSharingNotifier.value) {
+      _screenSharingNotifier.value = false;
+    }
+    if (forceRebind ||
+        nextRemote != _remoteTrack ||
+        nextLocal != _localTrack ||
+        nextRemoteScreen != _remoteScreenTrack ||
+        nextLocalScreen != _localScreenTrack) {
       setState(() {
         if (forceRebind) {
           _rendererRevision++;
         }
         _remoteTrack = nextRemote;
         _localTrack = nextLocal;
+        _remoteScreenTrack = nextRemoteScreen;
+        _localScreenTrack = nextLocalScreen;
       });
     }
   }
@@ -400,6 +413,15 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
       })
       ..on<livekit.TrackSubscribedEvent>((_) => _refreshVideoTracks(forceRebind: true))
       ..on<livekit.TrackUnsubscribedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.TrackPublishedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.TrackUnpublishedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.LocalTrackPublishedEvent>((_) => _refreshVideoTracks(forceRebind: true))
+      ..on<livekit.LocalTrackUnpublishedEvent>((event) {
+        if (event.publication.source == livekit.TrackSource.screenShareVideo) {
+          _screenSharingNotifier.value = false;
+        }
+        _refreshVideoTracks(forceRebind: true);
+      })
       ..on<livekit.TrackMutedEvent>((_) => _refreshVideoTracks(forceRebind: true))
       ..on<livekit.TrackUnmutedEvent>((_) => _refreshVideoTracks(forceRebind: true))
       ..on<livekit.TrackStreamStateUpdatedEvent>((_) => _refreshVideoTracks(forceRebind: true));
@@ -574,9 +596,38 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
 
   Future<void> _toggleShare() async {
     if (_ending || _ended) return;
-    final next = !_screenSharingNotifier.value;
-    _screenSharingNotifier.value = next;
-    await _session?.setScreenShareEnabled(next);
+    if (_session == null) return;
+    final currentlySharing = _screenSharingNotifier.value;
+    if (currentlySharing) {
+      await _session!.setScreenShareEnabled(false);
+      _screenSharingNotifier.value = false;
+    } else {
+      if (_session!.hasRemoteScreenShare) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${_user.name} is already sharing screen'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+      final success = await _session!.setScreenShareEnabled(true);
+      if (mounted) {
+        if (success) {
+          _screenSharingNotifier.value = true;
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Screen share cancelled or unavailable.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    }
+    _refreshVideoTracks();
   }
 
   Future<void> _toggleHold() async {
@@ -914,12 +965,14 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
       child: Container(
         color: Colors.black,
         child: remoteTrack != null
-            ? livekit.VideoTrackRenderer(
-                remoteTrack,
-                key: ValueKey(
-                  'split_remote_${remoteTrack.sid ?? remoteTrack.hashCode}_$_rendererRevision',
+            ? IgnorePointer(
+                child: livekit.VideoTrackRenderer(
+                  remoteTrack,
+                  key: ValueKey(
+                    'split_remote_${remoteTrack.sid ?? remoteTrack.hashCode}_$_rendererRevision',
+                  ),
+                  fit: livekit.VideoViewFit.cover,
                 ),
-                fit: livekit.VideoViewFit.cover,
               )
             : _buildDominantPlaceholder(
                 isLocal: false,
@@ -935,13 +988,15 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
       child: Container(
         color: Colors.black,
         child: (cameraEnabled && localTrack != null)
-            ? livekit.VideoTrackRenderer(
-                localTrack,
-                key: ValueKey(
-                  'split_local_${localTrack.sid ?? localTrack.hashCode}_$_rendererRevision',
+            ? IgnorePointer(
+                child: livekit.VideoTrackRenderer(
+                  localTrack,
+                  key: ValueKey(
+                    'split_local_${localTrack.sid ?? localTrack.hashCode}_$_rendererRevision',
+                  ),
+                  mirrorMode: livekit.VideoViewMirrorMode.mirror,
+                  fit: livekit.VideoViewFit.cover,
                 ),
-                mirrorMode: livekit.VideoViewMirrorMode.mirror,
-                fit: livekit.VideoViewFit.cover,
               )
             : _buildDominantPlaceholder(
                 isLocal: true,
@@ -979,6 +1034,10 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
 
     final remoteTrack = _remoteTrack ?? _session?.remoteVideoTrack;
     final localTrack = _localTrack ?? _session?.localVideoTrack;
+    final screenTrack = _remoteScreenTrack ??
+        _session?.remoteScreenShareTrack ??
+        _localScreenTrack ??
+        _session?.localScreenShareTrack;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -987,10 +1046,29 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Video Stage (50/50 Split or Dominant Video)
+            // Video Stage (Screen Share, 50/50 Split, or Dominant Video)
             ValueListenableBuilder<bool>(
               valueListenable: _cameraEnabledNotifier,
               builder: (context, cameraEnabled, _) {
+                if (screenTrack != null) {
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _toggleControls,
+                    child: Container(
+                      color: Colors.black,
+                      child: IgnorePointer(
+                        child: livekit.VideoTrackRenderer(
+                          screenTrack,
+                          key: ValueKey(
+                            'screen_${screenTrack.sid ?? screenTrack.hashCode}_$_rendererRevision',
+                          ),
+                          fit: livekit.VideoViewFit.contain,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
                 if (_isSplitScreen) {
                   return _buildSplitScreenStage(
                     remoteTrack: remoteTrack,
@@ -1010,15 +1088,17 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
                   behavior: HitTestBehavior.opaque,
                   onTap: _toggleControls,
                   child: isDominantActive
-                      ? livekit.VideoTrackRenderer(
-                          dominantTrack,
-                          key: ValueKey(
-                            'dominant_${dominantTrack.sid ?? dominantTrack.hashCode}_$_rendererRevision',
+                      ? IgnorePointer(
+                          child: livekit.VideoTrackRenderer(
+                            dominantTrack,
+                            key: ValueKey(
+                              'dominant_${dominantTrack.sid ?? dominantTrack.hashCode}_$_rendererRevision',
+                            ),
+                            mirrorMode: isDominantLocal
+                                ? livekit.VideoViewMirrorMode.mirror
+                                : livekit.VideoViewMirrorMode.off,
+                            fit: livekit.VideoViewFit.cover,
                           ),
-                          mirrorMode: isDominantLocal
-                              ? livekit.VideoViewMirrorMode.mirror
-                              : livekit.VideoViewMirrorMode.off,
-                          fit: livekit.VideoViewFit.cover,
                         )
                       : _buildDominantPlaceholder(
                           isLocal: isDominantLocal,
@@ -1261,6 +1341,40 @@ class _ActiveVideoCallScreenState extends State<ActiveVideoCallScreen>
                       );
                     },
                   ),
+
+                  // Remote Screen Share Banner (Persistent when remote is presenting)
+                  if ((_remoteScreenTrack != null || (_session?.remoteScreenShareTrack != null)) &&
+                      !_screenSharingNotifier.value)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.75),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.screen_share_rounded,
+                              size: 16,
+                              color: Color(0xFF22C55E),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${_session?.screenSharePresenterName ?? primaryName} is sharing screen',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

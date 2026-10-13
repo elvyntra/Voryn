@@ -11,7 +11,7 @@ class ScreenShareBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       margin: const EdgeInsets.symmetric(horizontal: 24),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E222A).withValues(alpha: 0.88),
+        color: const Color(0xFF17171a).withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
         boxShadow: [
@@ -29,7 +29,7 @@ class ScreenShareBanner extends StatelessWidget {
             width: 8,
             height: 8,
             decoration: const BoxDecoration(
-              color: Color(0xFFA78BFA),
+              color: Color(0xFF008F66),
               shape: BoxShape.circle,
             ),
           ),

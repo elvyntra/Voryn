@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/notifications/lock_screen_service.dart';
+import 'models/video_upgrade_models.dart';
 import 'voryn_call_latency_tracker.dart';
 import 'voryn_call_service.dart';
 import 'voryn_livekit_service.dart';
@@ -77,6 +78,7 @@ class VorynCallRuntimeCoordinator {
 
   void markConnected([DateTime? timestamp]) {
     _connectedAt ??= (timestamp ?? DateTime.now());
+    _isConnected = true;
   }
 
   Duration get currentDuration =>
@@ -90,6 +92,8 @@ class VorynCallRuntimeCoordinator {
   Object? _activeScreenKey;
   Function? _onStatusChanged;
   FutureOr<void> Function()? _onRouteExit;
+  void Function(VideoUpgradeRequest)? _onVideoUpgradeRequested;
+  void Function(String, VideoUpgradeStatus)? _onVideoUpgradeStatusChanged;
 
   bool isScreenActive(Object? key) => key != null && _activeScreenKey == key;
 
@@ -97,10 +101,14 @@ class VorynCallRuntimeCoordinator {
     Object? screenKey,
     required Function onStatusChanged,
     required FutureOr<void> Function() onRouteExit,
+    void Function(VideoUpgradeRequest)? onVideoUpgradeRequested,
+    void Function(String, VideoUpgradeStatus)? onVideoUpgradeStatusChanged,
   }) {
     _activeScreenKey = screenKey;
     _onStatusChanged = onStatusChanged;
     _onRouteExit = onRouteExit;
+    _onVideoUpgradeRequested = onVideoUpgradeRequested;
+    _onVideoUpgradeStatusChanged = onVideoUpgradeStatusChanged;
     isTransitioning = false;
     _ensureSubscription();
   }
@@ -110,6 +118,29 @@ class VorynCallRuntimeCoordinator {
       _activeScreenKey = null;
       _onStatusChanged = null;
       _onRouteExit = null;
+      _onVideoUpgradeRequested = null;
+      _onVideoUpgradeStatusChanged = null;
+    }
+  }
+
+  void notifyStatus(String status, [String? heldBy]) {
+    final cb = _onStatusChanged;
+    if (cb != null) {
+      if (cb is void Function(String, [String?])) {
+        cb(status, heldBy);
+      } else if (cb is void Function(String, String?)) {
+        cb(status, heldBy);
+      } else if (cb is void Function(String)) {
+        cb(status);
+      } else {
+        try {
+          (cb as dynamic)(status, heldBy);
+        } catch (_) {
+          try {
+            (cb as dynamic)(status);
+          } catch (_) {}
+        }
+      }
     }
   }
 
@@ -183,7 +214,14 @@ class VorynCallRuntimeCoordinator {
         );
         performTeardown(isLocalInitiator: false);
       }
-    });
+    },
+      onVideoUpgradeRequested: (req) {
+        _onVideoUpgradeRequested?.call(req);
+      },
+      onVideoUpgradeStatusChanged: (reqId, status) {
+        _onVideoUpgradeStatusChanged?.call(reqId, status);
+      },
+    );
   }
 
   Future<VorynLiveKitSession> connect({

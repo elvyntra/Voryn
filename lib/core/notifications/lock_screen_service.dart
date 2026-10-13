@@ -232,6 +232,18 @@ class LockScreenService {
     } catch (_) {}
   }
 
+  /// Tells native Android foreground service whether screen sharing is currently active.
+  static Future<void> setScreenShareActive(bool active) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('setScreenShareActive', {
+        'active': active,
+      });
+    } catch (_) {}
+  }
+
   /// Minimizes VorynCallActivity to the background while keeping the call active.
   static Future<void> minimizeActiveCall() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {

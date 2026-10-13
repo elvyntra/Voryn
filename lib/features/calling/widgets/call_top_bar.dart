@@ -8,12 +8,16 @@ class CallTopBar extends StatelessWidget {
     this.centerWidget,
     this.onAddParticipant,
     this.showAddParticipant = true,
+    this.onToggleLayout,
+    this.isSplitScreen = false,
   });
 
   final VoidCallback onMinimize;
   final Widget? centerWidget;
   final VoidCallback? onAddParticipant;
   final bool showAddParticipant;
+  final VoidCallback? onToggleLayout;
+  final bool isSplitScreen;
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +38,30 @@ class CallTopBar extends StatelessWidget {
             ),
             tooltip: 'Minimize call',
           ),
+          if (onToggleLayout != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              key: const Key('layout_toggle_button'),
+              onPressed: onToggleLayout,
+              icon: Icon(
+                isSplitScreen
+                    ? Icons.picture_in_picture_alt_rounded
+                    : Icons.splitscreen_rounded,
+                size: 20,
+              ),
+              style: IconButton.styleFrom(
+                backgroundColor: isSplitScreen
+                    ? colors.accent.withValues(alpha: 0.8)
+                    : colors.surfaceRaised.withValues(alpha: 0.6),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.all(8),
+                minimumSize: const Size(44, 44),
+              ),
+              tooltip: isSplitScreen
+                  ? 'Switch to PiP View'
+                  : 'Switch to 50/50 Split View',
+            ),
+          ],
           Expanded(
             child: centerWidget != null
                 ? Center(child: centerWidget)

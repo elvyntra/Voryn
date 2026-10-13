@@ -8,6 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backend/voryn_backend.dart';
+import '../../features/meetings/services/voryn_meeting_link_service.dart';
 import 'lock_screen_service.dart';
 
 @pragma('vm:entry-point')
@@ -102,6 +103,15 @@ class VorynFirebaseMessaging {
     final messaging = FirebaseMessaging.instance;
     messaging.onTokenRefresh.listen(_registerToken);
     FirebaseMessaging.onMessage.listen((message) async {
+      final type = message.data['type'];
+      if (type == 'meeting_invitation') {
+        final joinCode = message.data['join_code']?.toString() ?? '';
+        debugPrint('[FCM_MEETING] foreground receive joinCode=$joinCode');
+        if (joinCode.isNotEmpty) {
+          VorynMeetingLinkService.notifyMeetingInvitationReceived(joinCode);
+        }
+        return;
+      }
       final callId = message.data['call_id'] ?? message.data['callId'] ?? '';
       debugPrint('[FCM_CALL] foreground receive callId=$callId');
       if (defaultTargetPlatform != TargetPlatform.android) {

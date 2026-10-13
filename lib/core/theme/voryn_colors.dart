@@ -20,6 +20,11 @@ class VorynColors extends ThemeExtension<VorynColors> {
     required this.warning,
     required this.danger,
     required this.disabled,
+    this.card = const Color(0xFF1C1C20),
+    this.primaryEmerald = const Color(0xFF008F66),
+    this.deepEmerald = const Color(0xFF064E3B),
+    this.forestGreen = const Color(0xFF065F46),
+    this.softMint = const Color(0xFFD1FAE5),
   });
 
   final Color background;
@@ -27,12 +32,14 @@ class VorynColors extends ThemeExtension<VorynColors> {
   final Color surface;
   final Color surfaceRaised;
   final Color surfacePressed;
+  final Color card;
   final Color border;
   final Color textPrimary;
   final Color textSecondary;
   final Color textMuted;
   final Color iconMuted;
   final Color accent;
+  /// Retained for backwards compatibility with existing UI components; maps to forestGreen.
   final Color accentViolet;
   final Color accentSoft;
   final Color success;
@@ -40,50 +47,66 @@ class VorynColors extends ThemeExtension<VorynColors> {
   final Color danger;
   final Color disabled;
 
+  // Canonical VoRyn Emerald Design System Tokens
+  final Color primaryEmerald;
+  final Color deepEmerald;
+  final Color forestGreen;
+  final Color softMint;
+
   static const dark = VorynColors(
-    background: Color(0xFF050507),
-    backgroundSoft: Color(0xFF0A0B10),
-    surface: Color(0xFF12131A),
-    surfaceRaised: Color(0xFF1A1B24),
-    surfacePressed: Color(0xFF232431),
-    border: Color(0x1FFFFFFF),
-    textPrimary: Color(0xFFF8F8FB),
-    textSecondary: Color(0xFFB9BBC6),
-    textMuted: Color(0xFF7C7F8D),
-    iconMuted: Color(0xFF8D90A0),
-    accent: Color(0xFF6C7CFF),
-    accentViolet: Color(0xFF8B5CF6),
-    accentSoft: Color(0x336C7CFF),
-    success: Color(0xFF32D583),
-    warning: Color(0xFFFFB84D),
-    danger: Color(0xFFFF4D5E),
-    disabled: Color(0xFF343541),
+    background: Color(0xFF0B0B0D),
+    backgroundSoft: Color(0xFF111114),
+    surface: Color(0xFF17171A),
+    surfaceRaised: Color(0xFF202024),
+    surfacePressed: Color(0xFF28282D),
+    card: Color(0xFF1C1C20),
+    border: Color(0xFF303036),
+    textPrimary: Color(0xFFFFFFFF),
+    textSecondary: Color(0xFFA8A8B3),
+    textMuted: Color(0xFF71717A),
+    iconMuted: Color(0xFF8E8E99),
+    accent: Color(0xFF008F66),
+    accentViolet: Color(0xFF065F46), // Mapped to forestGreen
+    accentSoft: Color(0x33008F66),
+    success: Color(0xFF10B981),
+    warning: Color(0xFFF59E0B),
+    danger: Color(0xFFDC2626),
+    disabled: Color(0xFF27272A),
+    primaryEmerald: Color(0xFF008F66),
+    deepEmerald: Color(0xFF064E3B),
+    forestGreen: Color(0xFF065F46),
+    softMint: Color(0xFFD1FAE5),
   );
 
   static const light = VorynColors(
-    background: Color(0xFFF7F7FB),
-    backgroundSoft: Color(0xFFFFFFFF),
-    surface: Color(0xFFFFFFFF),
-    surfaceRaised: Color(0xFFF1F2F7),
-    surfacePressed: Color(0xFFE7E9F3),
-    border: Color(0x1A111827),
-    textPrimary: Color(0xFF11131A),
-    textSecondary: Color(0xFF4C5263),
-    textMuted: Color(0xFF7A8194),
-    iconMuted: Color(0xFF697083),
-    accent: Color(0xFF5D6BFF),
-    accentViolet: Color(0xFF7C3AED),
-    accentSoft: Color(0x245D6BFF),
-    success: Color(0xFF12B76A),
-    warning: Color(0xFFF79009),
-    danger: Color(0xFFF04438),
-    disabled: Color(0xFFD9DCE8),
+    background: Color(0xFFFFFFFF),
+    backgroundSoft: Color(0xFFF8FAF9),
+    surface: Color(0xFFF8FAF9),
+    surfaceRaised: Color(0xFFEEF3F0),
+    surfacePressed: Color(0xFFE2EBE6),
+    card: Color(0xFFF8FAF9),
+    border: Color(0x1A102A23),
+    textPrimary: Color(0xFF102A23),
+    textSecondary: Color(0xFF325349),
+    textMuted: Color(0xFF5E7E74),
+    iconMuted: Color(0xFF5E7E74),
+    accent: Color(0xFF008F66),
+    accentViolet: Color(0xFF065F46), // Mapped to forestGreen
+    accentSoft: Color(0x1F008F66),
+    success: Color(0xFF008F66),
+    warning: Color(0xFFD97706),
+    danger: Color(0xFFDC2626),
+    disabled: Color(0xFFD1DCD6),
+    primaryEmerald: Color(0xFF008F66),
+    deepEmerald: Color(0xFF064E3B),
+    forestGreen: Color(0xFF065F46),
+    softMint: Color(0xFFD1FAE5),
   );
 
   LinearGradient get accentGradient => LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [accent, accentViolet],
+    colors: [primaryEmerald, forestGreen],
   );
 
   @override
@@ -93,6 +116,7 @@ class VorynColors extends ThemeExtension<VorynColors> {
     Color? surface,
     Color? surfaceRaised,
     Color? surfacePressed,
+    Color? card,
     Color? border,
     Color? textPrimary,
     Color? textSecondary,
@@ -105,6 +129,10 @@ class VorynColors extends ThemeExtension<VorynColors> {
     Color? warning,
     Color? danger,
     Color? disabled,
+    Color? primaryEmerald,
+    Color? deepEmerald,
+    Color? forestGreen,
+    Color? softMint,
   }) {
     return VorynColors(
       background: background ?? this.background,
@@ -112,6 +140,7 @@ class VorynColors extends ThemeExtension<VorynColors> {
       surface: surface ?? this.surface,
       surfaceRaised: surfaceRaised ?? this.surfaceRaised,
       surfacePressed: surfacePressed ?? this.surfacePressed,
+      card: card ?? this.card,
       border: border ?? this.border,
       textPrimary: textPrimary ?? this.textPrimary,
       textSecondary: textSecondary ?? this.textSecondary,
@@ -124,6 +153,10 @@ class VorynColors extends ThemeExtension<VorynColors> {
       warning: warning ?? this.warning,
       danger: danger ?? this.danger,
       disabled: disabled ?? this.disabled,
+      primaryEmerald: primaryEmerald ?? this.primaryEmerald,
+      deepEmerald: deepEmerald ?? this.deepEmerald,
+      forestGreen: forestGreen ?? this.forestGreen,
+      softMint: softMint ?? this.softMint,
     );
   }
 
@@ -137,6 +170,7 @@ class VorynColors extends ThemeExtension<VorynColors> {
       surface: Color.lerp(surface, other.surface, t)!,
       surfaceRaised: Color.lerp(surfaceRaised, other.surfaceRaised, t)!,
       surfacePressed: Color.lerp(surfacePressed, other.surfacePressed, t)!,
+      card: Color.lerp(card, other.card, t)!,
       border: Color.lerp(border, other.border, t)!,
       textPrimary: Color.lerp(textPrimary, other.textPrimary, t)!,
       textSecondary: Color.lerp(textSecondary, other.textSecondary, t)!,
@@ -149,6 +183,10 @@ class VorynColors extends ThemeExtension<VorynColors> {
       warning: Color.lerp(warning, other.warning, t)!,
       danger: Color.lerp(danger, other.danger, t)!,
       disabled: Color.lerp(disabled, other.disabled, t)!,
+      primaryEmerald: Color.lerp(primaryEmerald, other.primaryEmerald, t)!,
+      deepEmerald: Color.lerp(deepEmerald, other.deepEmerald, t)!,
+      forestGreen: Color.lerp(forestGreen, other.forestGreen, t)!,
+      softMint: Color.lerp(softMint, other.softMint, t)!,
     );
   }
 }

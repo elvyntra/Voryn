@@ -135,7 +135,7 @@ class WelcomeScreen extends StatelessWidget {
             style: ButtonStyle(
               foregroundColor: WidgetStateProperty.resolveWith(
                 (states) => states.contains(WidgetState.hovered)
-                    ? colors.accentViolet
+                    ? colors.forestGreen
                     : colors.accent,
               ),
               overlayColor: WidgetStatePropertyAll(colors.accentSoft),
@@ -995,7 +995,6 @@ class VorynBrandMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.vorynColors;
     final brightness = Theme.of(context).brightness;
 
     return Container(
@@ -1003,13 +1002,6 @@ class VorynBrandMark extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(size * 0.28),
-        boxShadow: [
-          BoxShadow(
-            color: colors.accent.withValues(alpha: 0.28),
-            blurRadius: 28,
-            offset: const Offset(0, 14),
-          ),
-        ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Image.asset(
@@ -1019,7 +1011,7 @@ class VorynBrandMark extends StatelessWidget {
         width: size,
         height: size,
         fit: BoxFit.cover,
-        semanticLabel: 'Voryn logo',
+        semanticLabel: 'VoRyn logo',
       ),
     );
   }

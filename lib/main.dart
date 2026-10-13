@@ -29,6 +29,10 @@ import 'features/calling/voryn_mini_call_bar.dart';
 import 'features/contacts/contacts_live_screen.dart';
 import 'features/recents/recents_live_screen.dart';
 import 'features/meetings/meetings_screen.dart';
+import 'features/meetings/meeting_direct_link_screen.dart';
+import 'features/meetings/meeting_room_screen.dart';
+import 'features/meetings/models/meeting_models.dart';
+import 'features/meetings/services/voryn_meeting_link_service.dart';
 import 'features/onboarding/onboarding_screens.dart';
 import 'features/onboarding/landing_screen.dart';
 import 'features/messages/call_messages_screen.dart';
@@ -59,6 +63,21 @@ Future<AppLaunchConfig> resolveAppLaunchConfig() async {
   final defaultRoute =
       WidgetsBinding.instance.platformDispatcher.defaultRouteName;
   debugPrint('[CALL_ROUTE] defaultRouteName=$defaultRoute');
+
+  if (defaultRoute.contains('/m/') ||
+      defaultRoute.contains('/meeting/') ||
+      defaultRoute.startsWith('voryn://m') ||
+      defaultRoute.startsWith('voryn://meeting')) {
+    final parsed = VorynMeetingLinkService.parse(defaultRoute);
+    if (parsed.isSuccess && parsed.link != null) {
+      final loc = parsed.link!.canonicalPath;
+      debugPrint('[BOOT] launchMode=normal initialLocation=$loc from defaultRouteName');
+      return AppLaunchConfig(
+        mode: AppLaunchMode.normal,
+        initialLocation: loc,
+      );
+    }
+  }
 
   final nativeLaunch = await LockScreenService.getInitialCallLaunch();
   var action = nativeLaunch?['action'] ?? '';
@@ -306,6 +325,22 @@ class _VorynCallHostAppState extends State<VorynCallHostApp> {
           );
         },
       ),
+      GoRoute(
+        path: '/group-call/:callId',
+        builder: (context, state) {
+          final callId = state.pathParameters['callId'] ?? widget.callId;
+          final extra = state.extra as Map<String, dynamic>?;
+          return GroupCallScreen(
+            callId: callId,
+            title: extra?['title'] as String? ?? 'Conference',
+            existingSession: extra?['session'] as VorynLiveKitSession?,
+            activeSpeakerName: extra?['speaker'] as String?,
+            participants: extra?['participants'] as List<GroupCallParticipant>?,
+            initialDuration: extra?['initialDuration'] as Duration?,
+            isInitiator: extra?['isInitiator'] as bool?,
+          );
+        },
+      ),
     ],
   );
 
@@ -396,6 +431,7 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     initialLocation: widget.initialLocation,
   );
   StreamSubscription<AuthState>? _authSubscription;
+  StreamSubscription<String>? _meetingLinkSubscription;
   bool _firstFrameReported = false;
 
   @override
@@ -404,6 +440,21 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     VorynPresenceService.onLifecycleChanged(AppLifecycleState.resumed);
     VorynBackgroundAuthBridge.instance.initialize();
+    VorynMeetingLinkService.initializePlatformBridge();
+    _meetingLinkSubscription =
+        VorynMeetingLinkService.onMeetingLinkReceived.listen((rawLink) {
+      if (!mounted || _isCallRouteActive()) return;
+      final parsed = VorynMeetingLinkService.parse(rawLink);
+      if (parsed.isSuccess && parsed.link != null) {
+        final currentUser = VorynBackend.client?.auth.currentUser;
+        if (currentUser == null) {
+          VorynMeetingLinkService.setPendingIntent(parsed.link!.joinCode);
+          _router.go('/welcome');
+        } else {
+          _router.go(parsed.link!.canonicalPath);
+        }
+      }
+    });
     VorynBackgroundAuthBridge.instance.onOpenThread.listen((threadId) {
       if (mounted && !_isCallRouteActive()) {
         _router.go('/messages/thread/$threadId');
@@ -536,9 +587,20 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
               widget.initialLaunchConfig?.mode == AppLaunchMode.normal) {
             final isLocked = await LockScreenService.isKeyguardLocked();
             if (!isLocked && !_isCallRouteActive()) {
-              final target = _auth.routeAfterAuthentication(user);
-              debugPrint('[BOOT] auth redirect to $target');
-              _router.go(target);
+              final pendingMeetingCode =
+                  VorynMeetingLinkService.consumePendingIntent(
+                    currentUserUid: user.id,
+                  );
+              if (pendingMeetingCode != null) {
+                debugPrint(
+                  '[BOOT] restoring pending meeting link: /m/$pendingMeetingCode',
+                );
+                _router.go('/m/$pendingMeetingCode');
+              } else {
+                final target = _auth.routeAfterAuthentication(user);
+                debugPrint('[BOOT] auth redirect to $target');
+                _router.go(target);
+              }
             } else {
               debugPrint(
                 '[BOOT] suppressed auth redirect: phone locked or call active',
@@ -546,6 +608,7 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
             }
           }
         } else if (state.event == AuthChangeEvent.signedOut) {
+          VorynMeetingLinkService.clearPendingIntent();
           VorynPresenceService.setOffline();
           VorynBackgroundAuthBridge.instance.clearSession();
           VorynMessageRepository.instance.disposeRealtime();
@@ -658,7 +721,8 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
       return loc.contains('/incoming-call') ||
           loc.contains('/active-audio-call') ||
           loc.contains('/active-video-call') ||
-          loc.contains('/group-call');
+          loc.contains('/group-call') ||
+          loc.contains('/meeting-room');
     } catch (_) {
       return false;
     }
@@ -798,6 +862,7 @@ class _VorynAppState extends State<VorynApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authSubscription?.cancel();
+    _meetingLinkSubscription?.cancel();
     _router.dispose();
     super.dispose();
   }
@@ -845,12 +910,34 @@ GoRouter _buildRouter({String? initialLocation}) {
     navigatorKey: rootNavigatorKey,
     initialLocation: loc,
     onException: (context, state, router) {
+      if (state.uri.scheme == 'voryn') {
+        final parsed = VorynMeetingLinkService.parse(state.uri.toString());
+        if (parsed.isSuccess && parsed.link != null) {
+          router.go(parsed.link!.canonicalPath);
+          return;
+        }
+      }
       final callback =
           state.uri.scheme == 'io.supabase.voryn' &&
           state.uri.host == 'login-callback';
       router.go(callback ? '/login-callback' : '/splash');
     },
     routes: [
+      GoRoute(
+        parentNavigatorKey: rootNavigatorKey,
+        path: '/m/:code',
+        builder: (context, state) => MeetingDirectLinkScreen(
+          rawCode: state.pathParameters['code'] ?? '',
+        ),
+      ),
+      GoRoute(
+        parentNavigatorKey: rootNavigatorKey,
+        path: '/meeting/:code',
+        redirect: (context, state) {
+          final code = state.pathParameters['code'] ?? '';
+          return '/m/$code';
+        },
+      ),
       GoRoute(
         path: '/splash',
         builder: (context, state) => const SplashScreen(),
@@ -959,12 +1046,37 @@ GoRouter _buildRouter({String? initialLocation}) {
         builder: (context, state) {
           final callId = state.pathParameters['callId'] ?? 'meeting';
           final extra = state.extra as Map<String, dynamic>?;
-          final title = extra?['title'] as String? ?? 'Meeting $callId';
+          final title = extra?['title'] as String? ?? 'Conference';
           final session = extra?['session'] as VorynLiveKitSession?;
           return GroupCallScreen(
             callId: callId,
             title: title,
             existingSession: session,
+            activeSpeakerName: extra?['speaker'] as String?,
+            participants: extra?['participants'] as List<GroupCallParticipant>?,
+            initialDuration: extra?['initialDuration'] as Duration?,
+            isInitiator: extra?['isInitiator'] as bool?,
+          );
+        },
+      ),
+      GoRoute(
+        parentNavigatorKey: rootNavigatorKey,
+        path: '/meeting-room/:meetingId',
+        builder: (context, state) {
+          final meetingId = state.pathParameters['meetingId'] ?? '';
+          final extra = state.extra as Map<String, dynamic>?;
+          final joinedMeeting = extra?['joinedMeeting'] as VorynJoinedMeeting?;
+          if (joinedMeeting != null) {
+            return MeetingRoomScreen(joinedMeeting: joinedMeeting);
+          }
+          return Scaffold(
+            backgroundColor: const Color(0xFF0b0b0d),
+            body: Center(
+              child: Text(
+                'Meeting $meetingId',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
           );
         },
       ),
@@ -1034,6 +1146,16 @@ GoRouter _buildRouter({String? initialLocation}) {
               GoRoute(
                 path: '/meetings',
                 builder: (context, state) => const MeetingsScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'new',
+                    builder: (context, state) => const NewMeetingScreen(),
+                  ),
+                  GoRoute(
+                    path: 'join',
+                    builder: (context, state) => const JoinMeetingScreen(),
+                  ),
+                ],
               ),
             ],
           ),

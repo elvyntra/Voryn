@@ -83,6 +83,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
   VideoUpgradeRequest? _incomingUpgradeRequest;
   Timer? _incomingUpgradeTimer;
   Timer? _incomingUpgradePollTimer;
+  final Set<String> _processedUpgradeRequestIds = {};
 
   void _sendLiveKitUpgradeSignal(String type, {String? requestId}) {
     try {
@@ -605,6 +606,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
       final req = await const VorynCallService().getActiveVideoUpgradeRequest(widget.callId);
       if (req != null && mounted) {
         final currentUid = VorynBackend.client?.auth.currentUser?.id;
+        if (currentUid == null) return;
         if (req.requestedBy == currentUid) {
           setState(() {
             _isRequestingVideo = true;
@@ -622,7 +624,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
               }
             });
           }
-        } else if (req.targetUserUid == currentUid || (req.targetUserUid.isEmpty && req.requestedBy != currentUid)) {
+        } else if (req.targetUserUid == currentUid && req.requestedBy != currentUid) {
           _handleIncomingVideoUpgrade(req);
         }
       }
@@ -631,9 +633,15 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
 
   void _handleIncomingVideoUpgrade(VideoUpgradeRequest req) {
     if (!mounted || _ending || _ended) return;
+    if (req.callId != widget.callId) return;
+    if (_isRequestingVideo) return;
+    if (req.isExpired()) return;
+    if (_processedUpgradeRequestIds.contains(req.id)) return;
+
     final currentUid = VorynBackend.client?.auth.currentUser?.id;
+    if (currentUid == null) return;
     if (req.requestedBy == currentUid) return;
-    if (req.targetUserUid.isNotEmpty && currentUid != null && req.targetUserUid != currentUid) return;
+    if (req.targetUserUid.isNotEmpty && req.targetUserUid != currentUid) return;
 
     _incomingUpgradeTimer?.cancel();
     setState(() {
@@ -711,14 +719,20 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
     if (!mounted || !_isRequestingVideo || _ending || _ended) return;
     if (reqId.isEmpty || reqId != _outgoingUpgradeRequestId) return;
 
-    for (int attempt = 0; attempt < 2; attempt++) {
+    for (int attempt = 0; attempt < 3; attempt++) {
       if (!mounted || !_isRequestingVideo) return;
-      final req = await const VorynCallService().getActiveVideoUpgradeRequest(widget.callId);
-      if (req != null && req.id == reqId && req.status == VideoUpgradeStatus.accepted) {
+      final req = await const VorynCallService().getVideoUpgradeRequestById(reqId);
+      if (req != null && req.status == VideoUpgradeStatus.accepted) {
         _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.accepted);
         return;
       }
-      if (attempt == 0) {
+      final call = await const VorynCallService().getCall(widget.callId);
+      final callType = call?['call_type'] as String?;
+      if (callType == 'video') {
+        _handleVideoUpgradeStatusChanged(reqId, VideoUpgradeStatus.accepted);
+        return;
+      }
+      if (attempt < 2) {
         await Future<void>.delayed(const Duration(milliseconds: 300));
       }
     }
@@ -796,18 +810,29 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
         _upgradePollTimer?.cancel();
         return;
       }
-      final req = await const VorynCallService().getActiveVideoUpgradeRequest(widget.callId);
-      if (req != null && mounted && _isRequestingVideo) {
-        if (req.status == VideoUpgradeStatus.accepted) {
-          _upgradePollTimer?.cancel();
-          _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.accepted);
-        } else if (req.status == VideoUpgradeStatus.declined) {
-          _upgradePollTimer?.cancel();
-          _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.declined);
-        } else if (req.status == VideoUpgradeStatus.cancelled || req.status == VideoUpgradeStatus.expired) {
-          _upgradePollTimer?.cancel();
-          _handleVideoUpgradeStatusChanged(req.id, req.status);
+      final outId = _outgoingUpgradeRequestId;
+      if (outId != null) {
+        final req = await const VorynCallService().getVideoUpgradeRequestById(outId);
+        if (req != null && mounted && _isRequestingVideo) {
+          if (req.status == VideoUpgradeStatus.accepted) {
+            _upgradePollTimer?.cancel();
+            _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.accepted);
+            return;
+          } else if (req.status == VideoUpgradeStatus.declined) {
+            _upgradePollTimer?.cancel();
+            _handleVideoUpgradeStatusChanged(req.id, VideoUpgradeStatus.declined);
+            return;
+          } else if (req.status == VideoUpgradeStatus.cancelled || req.status == VideoUpgradeStatus.expired) {
+            _upgradePollTimer?.cancel();
+            _handleVideoUpgradeStatusChanged(req.id, req.status);
+            return;
+          }
         }
+      }
+      final call = await const VorynCallService().getCall(widget.callId);
+      if (call?['call_type'] == 'video' && mounted && _isRequestingVideo) {
+        _upgradePollTimer?.cancel();
+        _handleVideoUpgradeStatusChanged(outId ?? '', VideoUpgradeStatus.accepted);
       }
     });
   }
@@ -830,6 +855,7 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
   Future<void> _respondToVideoUpgrade(bool accept) async {
     final req = _incomingUpgradeRequest;
     if (req == null) return;
+    _processedUpgradeRequestIds.add(req.id);
     _incomingUpgradeTimer?.cancel();
     _incomingUpgradePollTimer?.cancel();
     setState(() {
@@ -1130,13 +1156,13 @@ class _ActiveAudioCallScreenState extends State<ActiveAudioCallScreen>
                 ),
 
               // Video Upgrade Waiting Banner (Requester)
-              if (_isRequestingVideo)
+              if (_isRequestingVideo && _incomingUpgradeRequest == null)
                 VideoUpgradeWaitingBanner(
                   onCancel: _cancelVideoUpgrade,
                 ),
 
               // Video Upgrade Approval Prompt Card (Receiver)
-              if (_incomingUpgradeRequest != null)
+              if (_incomingUpgradeRequest != null && !_isRequestingVideo)
                 VideoUpgradePromptCard(
                   callerName: _user.name,
                   onAccept: () => _respondToVideoUpgrade(true),

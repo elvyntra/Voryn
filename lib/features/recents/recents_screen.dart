@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:go_router/go_router.dart';
+import '../../core/backend/voryn_backend.dart';
 import '../../core/theme/voryn_theme.dart';
 import '../../shared/widgets/voryn_avatar.dart';
 import '../../shared/widgets/voryn_card.dart';
@@ -15,7 +16,9 @@ import '../v2/v2_shared.dart';
 enum _RecentFilter { all, missed, audio, video }
 
 class RecentsScreen extends StatefulWidget {
-  const RecentsScreen({super.key});
+  const RecentsScreen({super.key, this.historyService});
+
+  final VorynCallHistoryService? historyService;
 
   @override
   State<RecentsScreen> createState() => _RecentsScreenState();
@@ -24,6 +27,16 @@ class RecentsScreen extends StatefulWidget {
 class _RecentsScreenState extends State<RecentsScreen> {
   final _search = TextEditingController();
   _RecentFilter _filter = _RecentFilter.all;
+  bool _isLoading = false;
+  String? _errorMessage;
+  List<VorynCallHistoryItem> _liveCalls = const [];
+  bool _isLive = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
 
   @override
   void dispose() {
@@ -31,7 +44,58 @@ class _RecentsScreenState extends State<RecentsScreen> {
     super.dispose();
   }
 
-  List<VorynMockCall> get _calls {
+  Future<void> _loadHistory() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      final service = widget.historyService ?? const VorynCallHistoryService();
+      final client = service.clientOverride ?? VorynBackend.client;
+      final isAuthed =
+          client?.auth.currentUser != null || widget.historyService != null;
+      if (isAuthed) {
+        final items = await service.load();
+        if (!mounted) return;
+        setState(() {
+          _liveCalls = items;
+          _isLive = true;
+          _isLoading = false;
+        });
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _isLive = false;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Failed to load call history: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
+  List<VorynCallHistoryItem> get _filteredLiveCalls {
+    final query = _search.text.trim().toLowerCase();
+    return _liveCalls.where((call) {
+      final filterMatch = switch (_filter) {
+        _RecentFilter.all => true,
+        _RecentFilter.missed => call.isMissed,
+        _RecentFilter.audio => call.callType == 'audio',
+        _RecentFilter.video => call.callType == 'video',
+      };
+      if (!filterMatch) return false;
+      if (query.isEmpty) return true;
+      return call.displayName.toLowerCase().contains(query) ||
+          call.vorynId.toLowerCase().contains(query) ||
+          call.otherUid.toLowerCase().contains(query);
+    }).toList();
+  }
+
+  List<VorynMockCall> get _filteredMockCalls {
     final query = _search.text.trim().toLowerCase();
     return mockRecentCalls.where((call) {
       if (mockRemovedHistoryUserIds.contains(call.userId)) {
@@ -62,64 +126,127 @@ class _RecentsScreenState extends State<RecentsScreen> {
   @override
   Widget build(BuildContext context) {
     final spacing = context.vorynSpacing;
-    final calls = _calls;
+    final colors = context.vorynColors;
 
     return SafeArea(
-      child: ListView(
-        padding: EdgeInsets.all(spacing.screen),
-        children: [
-          VorynGlobalHeader(
-            title: 'Recents',
-            subtitle: 'Your recent Voryn calls',
-          ),
-          Row(
-            children: [
-              IconButton(
-                tooltip: 'Search recents',
-                onPressed: () => setState(() {}),
-                icon: const Icon(Icons.search_rounded),
-              ),
-              IconButton(
-                tooltip: 'Filter recents',
-                onPressed: () => _showFilterSheet(context),
-                icon: const Icon(Icons.tune_rounded),
-              ),
-            ],
-          ),
-          SizedBox(height: spacing.md),
-          TextField(
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              hintText: 'Search recents',
-              prefixIcon: Icon(Icons.search_rounded),
+      child: RefreshIndicator(
+        onRefresh: _loadHistory,
+        color: colors.accent,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(spacing.screen),
+          children: [
+            const VorynGlobalHeader(
+              title: 'Recents',
+              subtitle: 'Your recent Voryn calls',
             ),
-          ),
-          SizedBox(height: spacing.md),
-          if (calls.isEmpty)
-            const _EmptyRecents()
-          else
-            for (final group in const ['Today', 'Yesterday', 'Earlier'])
-              if (calls.any((call) => call.group == group)) ...[
-                Text(group, style: Theme.of(context).textTheme.labelLarge),
-                SizedBox(height: spacing.sm),
-                VorynSurface(
-                  padding: EdgeInsets.zero,
-                  child: Column(
-                    children: [
-                      for (final call in calls.where(
-                        (item) => item.group == group,
-                      ))
-                        _RecentCallRow(
-                          call: call,
-                          onChanged: () => setState(() {}),
-                        ),
-                    ],
-                  ),
+            Row(
+              children: [
+                IconButton(
+                  tooltip: 'Search recents',
+                  onPressed: () => setState(() {}),
+                  icon: const Icon(Icons.search_rounded),
                 ),
-                SizedBox(height: spacing.lg),
+                IconButton(
+                  tooltip: 'Filter recents',
+                  onPressed: () => _showFilterSheet(context),
+                  icon: const Icon(Icons.tune_rounded),
+                ),
               ],
-        ],
+            ),
+            SizedBox(height: spacing.md),
+            TextField(
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                hintText: 'Search recents',
+                prefixIcon: Icon(Icons.search_rounded),
+              ),
+            ),
+            SizedBox(height: spacing.md),
+            if (_isLoading) ...[
+              SizedBox(height: spacing.xl),
+              Center(
+                child: CircularProgressIndicator(color: colors.accent),
+              ),
+              SizedBox(height: spacing.xl),
+            ] else if (_errorMessage != null) ...[
+              VorynSurface(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.error_outline_rounded,
+                      color: colors.danger,
+                      size: 36,
+                    ),
+                    SizedBox(height: spacing.sm),
+                    Text(
+                      _errorMessage!,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: colors.danger,
+                      ),
+                    ),
+                    SizedBox(height: spacing.md),
+                    ElevatedButton.icon(
+                      onPressed: _loadHistory,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ] else if (_isLive) ...[
+              if (_filteredLiveCalls.isEmpty)
+                const _EmptyRecents()
+              else
+                for (final group in const ['Today', 'Yesterday', 'Earlier'])
+                  if (_filteredLiveCalls.any((call) => call.group == group)) ...[
+                    Text(group, style: Theme.of(context).textTheme.labelLarge),
+                    SizedBox(height: spacing.sm),
+                    VorynSurface(
+                      padding: EdgeInsets.zero,
+                      child: Column(
+                        children: [
+                          for (final call in _filteredLiveCalls.where(
+                            (item) => item.group == group,
+                          ))
+                            _RecentHistoryItemRow(
+                              item: call,
+                              onChanged: _loadHistory,
+                            ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: spacing.lg),
+                  ],
+            ] else ...[
+              if (_filteredMockCalls.isEmpty)
+                const _EmptyRecents()
+              else
+                for (final group in const ['Today', 'Yesterday', 'Earlier'])
+                  if (_filteredMockCalls.any((call) => call.group == group)) ...[
+                    Text(group, style: Theme.of(context).textTheme.labelLarge),
+                    SizedBox(height: spacing.sm),
+                    VorynSurface(
+                      padding: EdgeInsets.zero,
+                      child: Column(
+                        children: [
+                          for (final call in _filteredMockCalls.where(
+                            (item) => item.group == group,
+                          ))
+                            _RecentCallRow(
+                              call: call,
+                              onChanged: () => setState(() {}),
+                            ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: spacing.lg),
+                  ],
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -157,6 +284,128 @@ class _RecentsScreenState extends State<RecentsScreen> {
     _RecentFilter.audio => 'Audio',
     _RecentFilter.video => 'Video',
   };
+}
+
+class _RecentHistoryItemRow extends StatelessWidget {
+  const _RecentHistoryItemRow({required this.item, required this.onChanged});
+
+  final VorynCallHistoryItem item;
+  final VoidCallback onChanged;
+
+  Future<void> _startDirectCall(
+    BuildContext context, {
+    required bool video,
+  }) async {
+    final scaffold = ScaffoldMessenger.of(context);
+    scaffold.showSnackBar(
+      SnackBar(
+        content: Text('Calling ${item.displayName}…'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    final candidate = item.otherUid.isNotEmpty ? item.otherUid : item.vorynId;
+    final req = await const VorynCallService().start(
+      vorynId: candidate,
+      video: video,
+    );
+    if (!context.mounted) return;
+    if (req.isSuccess && req.id != null) {
+      final loc = video
+          ? '/active-video-call/${req.id}'
+          : '/active-audio-call/${req.id}';
+      context.push(loc, extra: {'user': item.toMockUser()});
+    } else {
+      scaffold.showSnackBar(
+        SnackBar(
+          content: Text(req.error ?? 'Could not start call. Please try again.'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.vorynColors;
+    final spacing = context.vorynSpacing;
+    final isVideo = item.callType == 'video';
+    final missed = item.isMissed;
+    final user = item.toMockUser();
+
+    final statusText = switch (item.status) {
+      'missed' => 'Missed ${item.callType} call',
+      'declined' => 'Declined ${item.callType} call',
+      'cancelled' => 'Cancelled ${item.callType} call',
+      'failed' => 'Failed ${item.callType} call',
+      _ =>
+        '${item.direction == 'outgoing' ? '↗ Outgoing' : '↙ Incoming'} ${item.callType}',
+    };
+
+    return InkWell(
+      onTap: () async {
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => CallDetailsScreen(user: user)),
+        );
+        onChanged();
+      },
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: spacing.sm,
+          vertical: spacing.xs,
+        ),
+        child: Row(
+          children: [
+            VorynAvatar(
+              initials: item.initials,
+              size: VorynAvatarSize.medium,
+              presenceStatus: VorynPresenceStatus.online,
+            ),
+            SizedBox(width: spacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  SizedBox(height: spacing.xxs),
+                  Text(
+                    '$statusText · ${item.timeFormatted}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: missed ? colors.danger : colors.textSecondary,
+                    ),
+                  ),
+                  if (item.durationFormatted != null) ...[
+                    SizedBox(height: spacing.xxs),
+                    Text(
+                      item.durationFormatted!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Semantics(
+              button: true,
+              label: '${isVideo ? 'Video' : 'Audio'} callback',
+              child: IconButton(
+                tooltip: '${isVideo ? 'Video' : 'Audio'} callback',
+                onPressed: () => _startDirectCall(context, video: isVideo),
+                icon: Icon(
+                  isVideo ? Icons.videocam_outlined : Icons.phone_outlined,
+                  color: colors.accent,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _RecentCallRow extends StatelessWidget {

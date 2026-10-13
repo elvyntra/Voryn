@@ -45,6 +45,10 @@ class MainActivity : FlutterActivity() {
             private set
         var pendingThreadId: String? = null
             private set
+        var meetingLinksChannel: MethodChannel? = null
+            private set
+        var pendingMeetingLinkUrl: String? = null
+            private set
 
         private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -62,6 +66,19 @@ class MainActivity : FlutterActivity() {
                     )
                 } catch (e: Exception) {
                     Log.e("VorynMsg", "[MESSAGE_FCM] notifyIncomingMessage error: ${e.message}")
+                }
+            }
+        }
+
+        fun notifyMeetingInvitation(joinCode: String) {
+            mainHandler.post {
+                try {
+                    meetingLinksChannel?.invokeMethod(
+                        "onMeetingInvitation",
+                        mapOf("joinCode" to joinCode)
+                    )
+                } catch (e: Exception) {
+                    Log.e("VorynMeeting", "[MEETING_FCM] notifyMeetingInvitation error: ${e.message}")
                 }
             }
         }
@@ -163,6 +180,18 @@ class MainActivity : FlutterActivity() {
             }
         }
         messagesChannel = msgChannel
+        val meetChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.voryn.app/meeting_links")
+        meetChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getInitialMeetingLink" -> {
+                    val link = pendingMeetingLinkUrl
+                    pendingMeetingLinkUrl = null
+                    result.success(link)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        meetingLinksChannel = meetChannel
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -196,7 +225,9 @@ class MainActivity : FlutterActivity() {
         applyShowWhenLocked(false)
         IncomingCallNotificationManager.ensureChannel(this)
         VorynMessageNotificationManager.createNotificationChannel(this)
+        VorynMeetingNotificationManager.createNotificationChannel(this)
         checkMessageDeepLink(intent)
+        checkMeetingDeepLink(intent)
     }
 
     override fun onResume() {
@@ -326,6 +357,25 @@ class MainActivity : FlutterActivity() {
             bridge?.methodChannel?.invokeMethod("onCallLaunchIntent", launchData)
         }
         checkMessageDeepLink(intent)
+        checkMeetingDeepLink(intent)
+    }
+
+    private fun checkMeetingDeepLink(intent: Intent?) {
+        val dataUri = intent?.data ?: return
+        val scheme = dataUri.scheme?.lowercase() ?: ""
+        val host = dataUri.host?.lowercase() ?: ""
+        val path = dataUri.path ?: ""
+        val isMeeting = (scheme == "voryn" && (host == "m" || host == "meeting")) ||
+                ((scheme == "https" || scheme == "http") && (path.startsWith("/m/") || path.startsWith("/meeting/")))
+
+        if (isMeeting) {
+            val urlString = dataUri.toString()
+            Log.d("VorynMeeting", "[MEETING_LINK] received deep link: $urlString")
+            pendingMeetingLinkUrl = urlString
+            mainHandler.post {
+                meetingLinksChannel?.invokeMethod("onMeetingLink", mapOf("url" to urlString))
+            }
+        }
     }
 
     private fun checkMessageDeepLink(intent: Intent?) {
@@ -359,7 +409,11 @@ class MainActivity : FlutterActivity() {
             ?: intent.getStringExtra("callId")
             ?: ""
 
-        if (intent.data?.host == "messages") {
+        if (intent.data?.host == "messages" ||
+            intent.data?.host == "meeting" ||
+            intent.data?.host == "m" ||
+            intent.data?.path?.startsWith("/m/") == true ||
+            intent.data?.path?.startsWith("/meeting/") == true) {
             return null
         }
 

@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/backend/voryn_backend.dart';
 import '../../core/notifications/lock_screen_service.dart';
 import '../../core/presence/voryn_presence_service.dart';
+import 'models/video_upgrade_models.dart';
 import 'voryn_active_call_presentation_service.dart';
 import 'voryn_call_latency_tracker.dart';
 import 'voryn_call_runtime_coordinator.dart';
@@ -341,7 +342,7 @@ class VorynCallService {
     try {
       final res = await client
           .from('calls')
-          .select('id, status, call_type, initiated_by')
+          .select('id, status, call_type, initiated_by, held_by, merged_into_call_id')
           .eq('id', callId)
           .maybeSingle();
       return res;
@@ -435,6 +436,130 @@ class VorynCallService {
     }
   }
 
+  /// Initiates two-phase merge preparation via prepare_call_merge RPC.
+  Future<Map<String, dynamic>?> prepareCallMerge({
+    required String primaryCallId,
+    required String secondaryCallId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final dynamic res = await client.rpc(
+        'prepare_call_merge',
+        params: {
+          'p_primary_call_id': primaryCallId,
+          'p_secondary_call_id': secondaryCallId,
+        },
+      );
+      if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MERGE_CALLS] prepare_call_merge RPC error: $e');
+      return null;
+    }
+  }
+
+  /// Finalizes merge admission via canonical finalize-call-merge Edge Function.
+  Future<Map<String, dynamic>?> finalizeCallMerge({
+    required String mergeOperationId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final response = await client.functions.invoke(
+        'finalize-call-merge',
+        body: {'mergeOperationId': mergeOperationId},
+      );
+      final data = response.data;
+      if (data is Map) {
+        return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MERGE_CALLS] finalize-call-merge error: $e');
+      return null;
+    }
+  }
+
+  /// Cancels an in-flight merge operation via canonical cancel-call-merge Edge Function.
+  Future<Map<String, dynamic>?> cancelCallMerge({
+    required String mergeOperationId,
+    String reason = 'client_aborted',
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final response = await client.functions.invoke(
+        'cancel-call-merge',
+        body: {
+          'mergeOperationId': mergeOperationId,
+          'reason': reason,
+        },
+      );
+      final data = response.data;
+      if (data is Map) {
+        return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MERGE_CALLS] cancel-call-merge error: $e');
+      return null;
+    }
+  }
+
+  /// Fetches authoritative merge operation record by ID.
+  Future<Map<String, dynamic>?> getCallMergeOperation(
+    String mergeOperationId,
+  ) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final data = await client
+          .from('call_merge_operations')
+          .select()
+          .eq('id', mergeOperationId)
+          .maybeSingle();
+      if (data != null) {
+        return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MERGE_CALLS] getCallMergeOperation error: $e');
+      return null;
+    }
+  }
+
+  /// Fetches an active prepared/joining merge operation where current user is joining_user_uid.
+  Future<Map<String, dynamic>?> getActiveMergeOperationForJoining({
+    required String secondaryCallId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    final user = client.auth.currentUser;
+    if (user == null) return null;
+    try {
+      final Map<String, dynamic>? data = await client
+          .from('call_merge_operations')
+          .select()
+          .eq('secondary_call_id', secondaryCallId)
+          .eq('joining_user_uid', user.id)
+          .inFilter('status', ['prepared', 'joining'])
+          .gt('expires_at', DateTime.now().toUtc().toIso8601String())
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (data != null) {
+        return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[MERGE_CALLS] getActiveMergeOperationForJoining error: $e');
+      return null;
+    }
+  }
+
   Future<bool> setCallHoldState(String callId, bool isHeld) async {
     final client = VorynBackend.client;
     if (client == null) return false;
@@ -462,6 +587,8 @@ class VorynCallService {
     String callId,
     void Function(String status) onTerminal, {
     void Function(String status, String? heldBy)? onStatusChanged,
+    void Function(VideoUpgradeRequest request)? onVideoUpgradeRequested,
+    void Function(String requestId, VideoUpgradeStatus status)? onVideoUpgradeStatusChanged,
   }) {
     final client = VorynBackend.client;
     if (client == null) return null;
@@ -508,7 +635,44 @@ class VorynCallService {
       },
     );
 
-    // 3. Authoritative Postgres CDC updates on calls table
+    // 3. Audio-to-Video Upgrade peer broadcast events
+    channel.onBroadcast(
+      event: 'video_upgrade_requested',
+      callback: (payload) {
+        debugPrint('[CALL $callId] received video_upgrade_requested broadcast');
+        final req = VideoUpgradeRequest.fromJson(payload);
+        onVideoUpgradeRequested?.call(req);
+      },
+    );
+
+    channel.onBroadcast(
+      event: 'video_upgrade_accepted',
+      callback: (payload) {
+        final reqId = payload['requestId']?.toString() ?? '';
+        debugPrint('[CALL $callId] received video_upgrade_accepted broadcast (reqId=$reqId)');
+        onVideoUpgradeStatusChanged?.call(reqId, VideoUpgradeStatus.accepted);
+      },
+    );
+
+    channel.onBroadcast(
+      event: 'video_upgrade_declined',
+      callback: (payload) {
+        final reqId = payload['requestId']?.toString() ?? '';
+        debugPrint('[CALL $callId] received video_upgrade_declined broadcast (reqId=$reqId)');
+        onVideoUpgradeStatusChanged?.call(reqId, VideoUpgradeStatus.declined);
+      },
+    );
+
+    channel.onBroadcast(
+      event: 'video_upgrade_cancelled',
+      callback: (payload) {
+        final reqId = payload['requestId']?.toString() ?? '';
+        debugPrint('[CALL $callId] received video_upgrade_cancelled broadcast (reqId=$reqId)');
+        onVideoUpgradeStatusChanged?.call(reqId, VideoUpgradeStatus.cancelled);
+      },
+    );
+
+    // 4. Authoritative Postgres CDC updates on calls table
     channel.onPostgresChanges(
       event: PostgresChangeEvent.update,
       schema: 'public',
@@ -521,6 +685,7 @@ class VorynCallService {
       callback: (payload) {
         final status = payload.newRecord['status'] as String?;
         final heldBy = payload.newRecord['held_by'] as String?;
+        final callType = payload.newRecord['call_type'] as String?;
         if (status == 'completed' ||
             status == 'cancelled' ||
             status == 'declined' ||
@@ -532,15 +697,223 @@ class VorynCallService {
           handleTerminal(status ?? 'completed');
         } else if (status != null) {
           debugPrint(
-            '[CALL $callId] authoritative status change via postgres CDC: status=$status heldBy=$heldBy',
+            '[CALL $callId] authoritative status change via postgres CDC: status=$status heldBy=$heldBy callType=$callType',
           );
           onStatusChanged?.call(status, heldBy);
+          if (callType == 'video') {
+            onVideoUpgradeStatusChanged?.call('', VideoUpgradeStatus.accepted);
+          }
+        }
+      },
+    );
+
+    // 5. Authoritative Postgres CDC on call_video_upgrade_requests
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'call_video_upgrade_requests',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'call_id',
+        value: callId,
+      ),
+      callback: (payload) {
+        final record = payload.newRecord;
+        if (record.isNotEmpty) {
+          final req = VideoUpgradeRequest.fromJson(record);
+          debugPrint(
+            '[CALL $callId] CDC call_video_upgrade_requests event=${payload.eventType} status=${req.status}',
+          );
+          if (payload.eventType == PostgresChangeEvent.insert && req.status == VideoUpgradeStatus.pending) {
+            onVideoUpgradeRequested?.call(req);
+          } else {
+            onVideoUpgradeStatusChanged?.call(req.id, req.status);
+          }
         }
       },
     );
 
     channel.subscribe();
     return channel;
+  }
+
+  /// Initiates an in-call audio-to-video upgrade request with receiver approval.
+  Future<VideoUpgradeResult> requestVideoUpgrade(String callId) async {
+    final client = VorynBackend.client;
+    if (client == null || client.auth.currentUser == null) {
+      return const VideoUpgradeResult(
+        isSuccess: false,
+        errorMessage: 'Unauthenticated',
+      );
+    }
+    try {
+      final dynamic res = await client.rpc(
+        'request_video_upgrade',
+        params: {'p_call_id': callId},
+      );
+      if (res is Map) {
+        final ok = res['ok'] == true;
+        if (!ok) {
+          return VideoUpgradeResult(
+            isSuccess: false,
+            errorMessage: res['error']?.toString() ?? 'Failed to request video upgrade',
+          );
+        }
+        final statusStr = res['status']?.toString();
+        final coalesced = res['coalesced'] == true;
+        final requestId = res['request_id']?.toString();
+        final targetUserUid = res['target_user_uid']?.toString();
+        final expiresAtStr = res['expires_at']?.toString();
+        final expiresAt = expiresAtStr != null ? DateTime.tryParse(expiresAtStr)?.toLocal() : null;
+
+        final status = statusStr == 'accepted'
+            ? VideoUpgradeStatus.accepted
+            : VideoUpgradeStatus.pending;
+
+        // Broadcast to call room
+        try {
+          final channel = client.channel('call_room_$callId');
+          if (status == VideoUpgradeStatus.accepted) {
+            await channel.sendBroadcastMessage(
+              event: 'video_upgrade_accepted',
+              payload: {'requestId': requestId, 'callId': callId},
+            );
+          } else {
+            await channel.sendBroadcastMessage(
+              event: 'video_upgrade_requested',
+              payload: {
+                'id': requestId,
+                'callId': callId,
+                'requestedBy': client.auth.currentUser!.id,
+                'targetUserUid': targetUserUid,
+                'status': 'pending',
+                'createdAt': DateTime.now().toUtc().toIso8601String(),
+                'expiresAt': (expiresAt ?? DateTime.now().add(const Duration(seconds: 30))).toUtc().toIso8601String(),
+              },
+            );
+          }
+        } catch (_) {}
+
+        return VideoUpgradeResult(
+          isSuccess: true,
+          status: status,
+          requestId: requestId,
+          targetUserUid: targetUserUid,
+          expiresAt: expiresAt,
+          coalesced: coalesced,
+        );
+      }
+      return const VideoUpgradeResult(
+        isSuccess: false,
+        errorMessage: 'Invalid server response',
+      );
+    } catch (e) {
+      debugPrint('[CALL $callId] request_video_upgrade RPC error: $e');
+      return VideoUpgradeResult(
+        isSuccess: false,
+        errorMessage: e.toString(),
+      );
+    }
+  }
+
+  /// Designated recipient responds to an in-call video upgrade request.
+  Future<bool> respondVideoUpgrade(
+    String requestId,
+    bool accept, {
+    required String callId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return false;
+    try {
+      final dynamic res = await client.rpc(
+        'respond_video_upgrade',
+        params: {
+          'p_request_id': requestId,
+          'p_accept': accept,
+        },
+      );
+      if (res is Map && res['ok'] == true) {
+        try {
+          final channel = client.channel('call_room_$callId');
+          await channel.sendBroadcastMessage(
+            event: accept ? 'video_upgrade_accepted' : 'video_upgrade_declined',
+            payload: {'requestId': requestId, 'callId': callId},
+          );
+        } catch (_) {}
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[VIDEO_UPGRADE] respond_video_upgrade error: $e');
+      return false;
+    }
+  }
+
+  /// Requester cancels an in-flight video upgrade request.
+  Future<bool> cancelVideoUpgrade(
+    String requestId, {
+    required String callId,
+  }) async {
+    final client = VorynBackend.client;
+    if (client == null) return false;
+    try {
+      final dynamic res = await client.rpc(
+        'cancel_video_upgrade',
+        params: {'p_request_id': requestId},
+      );
+      if (res is Map && res['ok'] == true) {
+        try {
+          final channel = client.channel('call_room_$callId');
+          await channel.sendBroadcastMessage(
+            event: 'video_upgrade_cancelled',
+            payload: {'requestId': requestId, 'callId': callId},
+          );
+        } catch (_) {}
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[VIDEO_UPGRADE] cancel_video_upgrade error: $e');
+      return false;
+    }
+  }
+
+  /// Fetches the currently pending unexpired upgrade request for a call if any.
+  Future<VideoUpgradeRequest?> getActiveVideoUpgradeRequest(String callId) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final dynamic res = await client.rpc(
+        'get_active_video_upgrade_request',
+        params: {'p_call_id': callId},
+      );
+      if (res is Map) {
+        return VideoUpgradeRequest.fromJson(Map<String, dynamic>.from(res));
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[VIDEO_UPGRADE] get_active_video_upgrade_request error: $e');
+      return null;
+    }
+  }
+
+  /// Fetches an upgrade request by its specific request ID (regardless of pending/accepted status).
+  Future<VideoUpgradeRequest?> getVideoUpgradeRequestById(String requestId) async {
+    final client = VorynBackend.client;
+    if (client == null) return null;
+    try {
+      final res = await client
+          .from('call_video_upgrade_requests')
+          .select()
+          .eq('id', requestId)
+          .maybeSingle();
+      if (res != null) {
+        return VideoUpgradeRequest.fromJson(Map<String, dynamic>.from(res));
+      }
+    } catch (e) {
+      debugPrint('[VIDEO_UPGRADE] getVideoUpgradeRequestById error: $e');
+    }
+    return null;
   }
 
   Future<Map<String, dynamic>?> addParticipant({

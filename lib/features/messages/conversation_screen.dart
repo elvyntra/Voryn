@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/backend/voryn_backend.dart';
 import '../../core/theme/voryn_theme.dart';
@@ -36,8 +37,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
   final _store = VorynMessageLocalStore.instance;
   final _scrollController = ScrollController();
   final _textController = TextEditingController();
+  final _focusNode = FocusNode();
 
   List<VorynMessage> _messages = [];
+  VorynMessage? _replyingToMessage;
   bool _isLoading = true;
   bool _isLoadingMore = false;
   bool _hasMore = true;
@@ -175,6 +178,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _store.saveDraft(widget.threadId, _textController.text);
     }
     _textController.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -273,16 +277,31 @@ class _ConversationScreenState extends State<ConversationScreen> {
       return;
     }
 
+    String sendBody = text;
+    final replyingTo = _replyingToMessage;
+    if (replyingTo != null) {
+      final snippet = replyingTo.displayBody.replaceAll('\n', ' ');
+      final shortSnippet =
+          snippet.length > 16 ? '${snippet.substring(0, 14)}..' : snippet;
+      final candidate = '↩ "$shortSnippet" $text';
+      if (candidate.length <= 120) {
+        sendBody = candidate;
+      }
+    }
+
     _textController.clear();
     _store.clearDraft(widget.threadId);
     final remind = _remindToCall;
-    setState(() => _remindToCall = false);
+    setState(() {
+      _remindToCall = false;
+      _replyingToMessage = null;
+    });
 
     try {
       final sent = await _repo.sendMessage(
         threadId: widget.threadId,
         recipientUid: _otherUserUid!,
-        body: text,
+        body: sendBody,
         remindToCall: remind,
       );
 
@@ -305,6 +324,154 @@ class _ConversationScreenState extends State<ConversationScreen> {
         ).showSnackBar(SnackBar(content: Text('Failed to send: $e')));
       }
     }
+  }
+
+  void _startReplying(VorynMessage message) {
+    setState(() {
+      _replyingToMessage = message;
+      if (_editingMessage != null) {
+        _cancelEditing();
+      }
+    });
+    _focusNode.requestFocus();
+  }
+
+  void _cancelReplying() {
+    setState(() {
+      _replyingToMessage = null;
+    });
+  }
+
+  void _copyMessage(VorynMessage message) {
+    Clipboard.setData(ClipboardData(text: message.displayBody));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Message copied to clipboard'),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _forwardMessage(VorynMessage message) {
+    final colors = context.vorynColors;
+    final messenger = ScaffoldMessenger.of(context);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: colors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: FutureBuilder<List<VorynMessageThread>>(
+          future: _repo.loadThreads(),
+          builder: (sheetCtx, snapshot) {
+            final threads = snapshot.data ?? [];
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Text(
+                      'Forward message to',
+                      style: Theme.of(sheetCtx).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ),
+                  if (snapshot.connectionState == ConnectionState.waiting)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  else if (threads.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Text(
+                              'No other conversations found',
+                              style: TextStyle(color: colors.textSecondary),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton.icon(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _copyMessage(message);
+                              },
+                              icon: const Icon(Icons.copy_rounded, size: 18),
+                              label: const Text('Copy to share'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: threads.length,
+                        itemBuilder: (sheetCtx, index) {
+                          final thread = threads[index];
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: colors.surfaceRaised,
+                              child: Text(
+                                thread.otherUserName.isNotEmpty
+                                    ? thread.otherUserName[0].toUpperCase()
+                                    : '?',
+                                style: TextStyle(color: colors.textPrimary),
+                              ),
+                            ),
+                            title: Text(thread.otherUserName),
+                            subtitle: Text('@${thread.otherUserVorynId}'),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.send_rounded),
+                              color: colors.accent,
+                              tooltip: 'Forward',
+                              onPressed: () async {
+                                Navigator.pop(ctx);
+                                try {
+                                  await _repo.sendMessage(
+                                    threadId: thread.threadId,
+                                    recipientUid: thread.otherUserUid,
+                                    body: message.displayBody,
+                                    remindToCall: false,
+                                  );
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Forwarded to ${thread.otherUserName}',
+                                      ),
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                } catch (e) {
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text('Failed to forward: $e'),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
   }
 
   void _startEditing(VorynMessage message) {
@@ -716,6 +883,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
                         onEdit: () => _startEditing(msg),
                         onDeleteChoice: () => _showDeleteChoiceDialog(msg),
                         onDeleteForMe: () => _confirmDeleteForMe(msg),
+                        onReply: () => _startReplying(msg),
+                        onCopy: () => _copyMessage(msg),
+                        onForward: () => _forwardMessage(msg),
                       );
                     },
                   ),
@@ -745,6 +915,66 @@ class _ConversationScreenState extends State<ConversationScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Replying banner
+            if (_replyingToMessage != null && !isEditing)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                margin: const EdgeInsets.only(bottom: 6),
+                decoration: BoxDecoration(
+                  color: colors.surface,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border(
+                    left: BorderSide(color: colors.accent, width: 3),
+                    top: BorderSide(color: colors.border),
+                    right: BorderSide(color: colors.border),
+                    bottom: BorderSide(color: colors.border),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.reply_rounded, size: 14, color: colors.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _replyingToMessage!.senderName.isNotEmpty
+                                ? _replyingToMessage!.senderName
+                                : 'Replying',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: colors.accent,
+                            ),
+                          ),
+                          Text(
+                            _replyingToMessage!.displayBody,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: colors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _cancelReplying,
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: colors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             // Editing banner
             if (isEditing)
               Container(
@@ -841,6 +1071,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 Expanded(
                   child: TextField(
                     controller: _textController,
+                    focusNode: _focusNode,
                     maxLines: 4,
                     minLines: 1,
                     maxLength: 120,
@@ -944,6 +1175,9 @@ class _MessageBubble extends StatelessWidget {
     this.onEdit,
     this.onDeleteChoice,
     this.onDeleteForMe,
+    this.onReply,
+    this.onCopy,
+    this.onForward,
   });
 
   final VorynMessage message;
@@ -951,6 +1185,9 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDeleteChoice;
   final VoidCallback? onDeleteForMe;
+  final VoidCallback? onReply;
+  final VoidCallback? onCopy;
+  final VoidCallback? onForward;
 
   void _showBubbleOptions(BuildContext context) {
     final colors = context.vorynColors;
@@ -964,6 +1201,32 @@ class _MessageBubble extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (!message.isDeleted) ...[
+              ListTile(
+                leading: const Icon(Icons.reply_rounded),
+                title: const Text('Reply'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  onReply?.call();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.copy_rounded),
+                title: const Text('Copy'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  onCopy?.call();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.forward_rounded),
+                title: const Text('Forward'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  onForward?.call();
+                },
+              ),
+            ],
             if (isOutgoing && !message.isDeleted)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),

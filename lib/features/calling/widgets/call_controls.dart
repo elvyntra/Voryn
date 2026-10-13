@@ -24,6 +24,9 @@ class CallControlButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.vorynColors;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final buttonSize = screenWidth < 380 ? 48.0 : (screenWidth < 420 ? 54.0 : 60.0);
+    final iconSize = screenWidth < 380 ? 20.0 : (screenWidth < 420 ? 23.0 : 26.0);
 
     Color bg;
     Color fg;
@@ -39,37 +42,41 @@ class CallControlButton extends StatelessWidget {
       fg = foregroundColor ?? colors.textPrimary;
     }
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox.square(
-          dimension: 60,
-          child: Material(
-            color: bg,
-            shape: const CircleBorder(),
-            elevation: isDestructive ? 4 : 0,
-            shadowColor: isDestructive
-                ? const Color(0xFFF87171).withValues(alpha: 0.4)
-                : Colors.transparent,
-            child: InkWell(
-              onTap: onTap,
-              customBorder: const CircleBorder(),
-              child: Center(child: Icon(icon, size: 26, color: fg)),
+    return Semantics(
+      label: label,
+      button: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox.square(
+              dimension: buttonSize,
+              child: Material(
+                color: bg,
+                shape: const CircleBorder(),
+                elevation: isDestructive ? 4 : 0,
+                shadowColor: isDestructive
+                    ? const Color(0xFFF87171).withValues(alpha: 0.4)
+                    : Colors.transparent,
+                child: Center(child: Icon(icon, size: iconSize, color: fg)),
+              ),
             ),
-          ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontSize: screenWidth < 380 ? 11 : 12,
+                fontWeight: FontWeight.w500,
+                color: isDestructive
+                    ? const Color(0xFFFCA5A5)
+                    : colors.textSecondary,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: isDestructive
-                ? const Color(0xFFFCA5A5)
-                : colors.textSecondary,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -83,12 +90,18 @@ class CallControlTray extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.vorynColors;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final maxItems = row1.length > row2.length ? row1.length : row2.length;
+    final isCompact = screenWidth < 380 || maxItems >= 5;
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      margin: EdgeInsets.symmetric(horizontal: isCompact ? 10 : 20),
+      padding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 8 : 16,
+        vertical: isCompact ? 12 : 20,
+      ),
       decoration: BoxDecoration(
-        color: const Color(0xFF14171D).withValues(alpha: 0.92),
+        color: const Color(0xFF17171a).withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(28),
         border: Border.all(color: colors.border.withValues(alpha: 0.25)),
         boxShadow: [
@@ -102,9 +115,21 @@ class CallControlTray extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: row1),
-          const SizedBox(height: 18),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: row2),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              for (final btn in row1)
+                Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: btn)),
+            ],
+          ),
+          SizedBox(height: isCompact ? 14 : 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              for (final btn in row2)
+                Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: btn)),
+            ],
+          ),
         ],
       ),
     );

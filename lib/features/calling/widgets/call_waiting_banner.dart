@@ -23,9 +23,9 @@ class CallWaitingBanner extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E222A).withValues(alpha: 0.94),
+        color: const Color(0xFF17171a).withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFA78BFA).withValues(alpha: 0.3)),
+        border: Border.all(color: const Color(0xFF008F66).withValues(alpha: 0.35)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.4),
@@ -43,12 +43,12 @@ class CallWaitingBanner extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFA78BFA).withValues(alpha: 0.15),
+                  color: const Color(0xFF008F66).withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   isVideo ? Icons.videocam : Icons.phone_in_talk,
-                  color: const Color(0xFFA78BFA),
+                  color: const Color(0xFF10B981),
                   size: 20,
                 ),
               ),
@@ -62,7 +62,7 @@ class CallWaitingBanner extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFFA78BFA),
+                        color: Color(0xFF10B981),
                         letterSpacing: 0.5,
                       ),
                     ),

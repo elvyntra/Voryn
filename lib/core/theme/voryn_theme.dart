@@ -10,9 +10,12 @@ export 'voryn_radii.dart';
 export 'voryn_spacing.dart';
 
 extension VorynThemeContext on BuildContext {
-  VorynColors get vorynColors => Theme.of(this).extension<VorynColors>()!;
-  VorynSpacing get vorynSpacing => Theme.of(this).extension<VorynSpacing>()!;
-  VorynRadii get vorynRadii => Theme.of(this).extension<VorynRadii>()!;
+  VorynColors get vorynColors =>
+      Theme.of(this).extension<VorynColors>() ?? VorynColors.dark;
+  VorynSpacing get vorynSpacing =>
+      Theme.of(this).extension<VorynSpacing>() ?? VorynSpacing.regular;
+  VorynRadii get vorynRadii =>
+      Theme.of(this).extension<VorynRadii>() ?? VorynRadii.regular;
 }
 
 class VorynTheme {
@@ -38,7 +41,7 @@ class VorynTheme {
         brightness: brightness,
         primary: colors.accent,
         onPrimary: Colors.white,
-        secondary: colors.accentViolet,
+        secondary: colors.forestGreen,
         onSecondary: Colors.white,
         error: colors.danger,
         onError: Colors.white,
@@ -76,6 +79,46 @@ class VorynTheme {
           borderRadius: BorderRadius.circular(VorynRadii.regular.md),
           borderSide: BorderSide(color: colors.accent, width: 1.4),
         ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: colors.surface,
+        surfaceTintColor: Colors.transparent,
+        titleTextStyle: textTheme.titleLarge,
+        contentTextStyle: textTheme.bodyLarge,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(VorynRadii.regular.lg),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: colors.surfaceRaised,
+        contentTextStyle: TextStyle(color: colors.textPrimary),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(VorynRadii.regular.md),
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: colors.surface,
+        modalBackgroundColor: colors.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(VorynRadii.regular.xl),
+          ),
+        ),
+      ),
+      cardTheme: CardThemeData(
+        color: colors.card,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(VorynRadii.regular.md),
+          side: BorderSide(color: colors.border),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: colors.border,
+        thickness: 1,
+        space: 1,
       ),
     );
   }

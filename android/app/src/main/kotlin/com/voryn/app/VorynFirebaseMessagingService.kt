@@ -197,6 +197,27 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
                 }
                 return
             }
+            "meeting_invitation" -> {
+                val meetingId = data["meeting_id"] ?: ""
+                val joinCode = data["join_code"] ?: ""
+                val inviterName = data["inviter_name"] ?: "A contact"
+                val meetingTitle = data["meeting_title"] ?: "Meeting"
+
+                Log.d("VorynMeeting", "[MEETING_FCM] received meeting_invitation meetingId=$meetingId joinCode=$joinCode")
+                if (joinCode.isNotBlank()) {
+                    VorynMeetingNotificationManager.showMeetingInvitationNotification(
+                        this,
+                        meetingId,
+                        joinCode,
+                        inviterName,
+                        meetingTitle
+                    )
+                    if (MainActivity.isAppInForeground) {
+                        MainActivity.notifyMeetingInvitation(joinCode)
+                    }
+                }
+                return
+            }
             else -> {
                 super.onMessageReceived(remoteMessage)
             }

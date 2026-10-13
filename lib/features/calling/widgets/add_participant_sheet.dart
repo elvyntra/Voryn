@@ -41,7 +41,7 @@ class AddParticipantSheet extends StatefulWidget {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF16191E),
+      backgroundColor: const Color(0xFF17171a),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -296,7 +296,7 @@ class _AddParticipantSheetState extends State<AddParticipantSheet> {
                         )
                       : null,
                   filled: true,
-                  fillColor: const Color(0xFF20242B),
+                  fillColor: const Color(0xFF202024),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 10,

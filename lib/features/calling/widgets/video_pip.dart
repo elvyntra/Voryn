@@ -34,6 +34,7 @@ class VideoPip extends StatefulWidget {
 
 class _VideoPipState extends State<VideoPip> {
   Offset? _currentOffset;
+  Offset? _dragPosition;
   bool _isDragging = false;
 
   @override
@@ -52,12 +53,10 @@ class _VideoPipState extends State<VideoPip> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.vorynColors;
+    final colors = Theme.of(context).extension<VorynColors>();
     final isTabletOrWeb = MediaQuery.of(context).size.width > 600;
     final width = isTabletOrWeb ? 136.0 : 108.0;
     final height = isTabletOrWeb ? 190.0 : 152.0;
-
-    final defaultBottom = widget.controlsVisible ? 190.0 : 36.0;
 
     final pipWidget = Container(
       width: width,
@@ -85,15 +84,17 @@ class _VideoPipState extends State<VideoPip> {
         fit: StackFit.expand,
         children: [
           if (widget.isVideoEnabled && widget.videoTrack != null)
-            livekit.VideoTrackRenderer(
-              widget.videoTrack!,
-              key: ValueKey(
-                'pip_${widget.videoTrack!.sid ?? widget.videoTrack!.hashCode}',
+            IgnorePointer(
+              child: livekit.VideoTrackRenderer(
+                widget.videoTrack!,
+                key: ValueKey(
+                  'pip_${widget.videoTrack!.sid ?? widget.videoTrack!.hashCode}',
+                ),
+                mirrorMode: widget.isMirror
+                    ? livekit.VideoViewMirrorMode.mirror
+                    : livekit.VideoViewMirrorMode.off,
+                fit: livekit.VideoViewFit.cover,
               ),
-              mirrorMode: widget.isMirror
-                  ? livekit.VideoViewMirrorMode.mirror
-                  : livekit.VideoViewMirrorMode.off,
-              fit: livekit.VideoViewFit.cover,
             )
           else
             Container(
@@ -104,7 +105,7 @@ class _VideoPipState extends State<VideoPip> {
                   children: [
                     CircleAvatar(
                       radius: isTabletOrWeb ? 22 : 18,
-                      backgroundColor: colors.surfaceRaised,
+                      backgroundColor: colors?.surfaceRaised ?? const Color(0xFF202024),
                       child: Text(
                         widget.userInitials,
                         style: TextStyle(
@@ -202,50 +203,61 @@ class _VideoPipState extends State<VideoPip> {
     final screenSize = mediaQuery.size;
     final padding = mediaQuery.padding;
 
-    final minRight = padding.right + 12.0;
-    final maxRight = (screenSize.width - width - padding.left - 12.0)
-        .clamp(minRight, double.infinity);
+    final minLeft = padding.left + 12.0;
+    final maxLeft = (screenSize.width - width - padding.right - 12.0)
+        .clamp(minLeft, double.infinity);
 
-    final minBottom = padding.bottom + (widget.controlsVisible ? 180.0 : 24.0);
-    final maxBottom = (screenSize.height - height - padding.top - 24.0)
-        .clamp(minBottom, double.infinity);
+    final minTop = padding.top + (widget.controlsVisible ? 76.0 : 20.0);
+    final bottomControlsHeight = widget.controlsVisible ? 260.0 : 24.0;
+    final maxTop = (screenSize.height - height - padding.bottom - bottomControlsHeight)
+        .clamp(minTop, double.infinity);
 
-    final cur = _currentOffset;
-    final resolvedRight = cur != null
-        ? cur.dx.clamp(minRight, maxRight)
-        : minRight;
-    final resolvedBottom = cur != null
-        ? cur.dy.clamp(minBottom, maxBottom)
-        : defaultBottom.clamp(minBottom, maxBottom);
+    final resolvedLeft = (_currentOffset?.dx ?? maxLeft).clamp(minLeft, maxLeft);
+    final resolvedTop = (_currentOffset?.dy ?? maxTop).clamp(minTop, maxTop);
+
+    final leftPos = _isDragging
+        ? (_dragPosition?.dx ?? resolvedLeft).clamp(minLeft, maxLeft)
+        : resolvedLeft;
+    final topPos = _isDragging
+        ? (_dragPosition?.dy ?? resolvedTop).clamp(minTop, maxTop)
+        : resolvedTop;
 
     return AnimatedPositioned(
-      duration: _isDragging ? Duration.zero : const Duration(milliseconds: 200),
+      duration: _isDragging ? Duration.zero : const Duration(milliseconds: 250),
       curve: Curves.easeOutCubic,
-      right: resolvedRight,
-      bottom: resolvedBottom,
+      left: leftPos,
+      top: topPos,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        onPanStart: (_) {
+        onPanStart: (details) {
           _isDragging = true;
-          _currentOffset = Offset(resolvedRight, resolvedBottom);
+          _dragPosition = Offset(resolvedLeft, resolvedTop);
           setState(() {});
         },
         onPanUpdate: (details) {
-          final curDx = _currentOffset?.dx ?? resolvedRight;
-          final curDy = _currentOffset?.dy ?? resolvedBottom;
-          final nextDx = (curDx - details.delta.dx).clamp(minRight, maxRight);
-          final nextDy = (curDy - details.delta.dy).clamp(minBottom, maxBottom);
-          final nextOffset = Offset(nextDx, nextDy);
-          _currentOffset = nextOffset;
+          final curX = _dragPosition?.dx ?? resolvedLeft;
+          final curY = _dragPosition?.dy ?? resolvedTop;
+          final nextX = (curX + details.delta.dx).clamp(minLeft, maxLeft);
+          final nextY = (curY + details.delta.dy).clamp(minTop, maxTop);
+          _dragPosition = Offset(nextX, nextY);
           setState(() {});
-          widget.onOffsetChanged?.call(nextOffset);
         },
         onPanEnd: (_) {
-          setState(() => _isDragging = false);
+          final finalX = (_dragPosition?.dx ?? resolvedLeft).clamp(minLeft, maxLeft);
+          final finalY = (_dragPosition?.dy ?? resolvedTop).clamp(minTop, maxTop);
+          final persistentOffset = Offset(finalX, finalY);
+          _currentOffset = persistentOffset;
+          _isDragging = false;
+          _dragPosition = null;
+          setState(() {});
+          widget.onOffsetChanged?.call(persistentOffset);
         },
         onPanCancel: () {
-          setState(() => _isDragging = false);
+          setState(() {
+            _isDragging = false;
+            _dragPosition = null;
+          });
         },
         child: pipWidget,
       ),

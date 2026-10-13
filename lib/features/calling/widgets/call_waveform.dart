@@ -49,7 +49,7 @@ class _CallWaveformState extends State<CallWaveform>
 
   @override
   Widget build(BuildContext context) {
-    final waveColor = widget.color ?? const Color(0xFFA78BFA);
+    final waveColor = widget.color ?? const Color(0xFF008F66);
 
     return AnimatedBuilder(
       animation: _controller,

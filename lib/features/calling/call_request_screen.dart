@@ -72,7 +72,7 @@ class _CallRequestScreenState extends State<CallRequestScreen> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0F12),
+      backgroundColor: const Color(0xFF0b0b0d),
       body: SafeArea(
         child: Center(
           child: Padding(
@@ -81,7 +81,7 @@ class _CallRequestScreenState extends State<CallRequestScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 if (_initiating) ...[
-                  const CircularProgressIndicator(color: Color(0xFF22C55E)),
+                  const CircularProgressIndicator(color: Color(0xFF008F66)),
                   const SizedBox(height: 24),
                   Text(
                     'Calling ${widget.user.displayName}…',

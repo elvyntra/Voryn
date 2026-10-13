@@ -245,6 +245,11 @@ class VorynCallPlatformBridge(
                     }
                     result.success(true)
                 }
+                "setScreenShareActive" -> {
+                    val active = call.argument<Boolean>("active") ?: false
+                    VorynActiveCallService.setScreenShareActive(activity, active)
+                    result.success(true)
+                }
                 "minimizeActiveCall" -> {
                     val callId = VorynCallStateManager.getCurrentCallId(activity) ?: ""
                     val state = VorynCallStateManager.getCurrentState(activity)

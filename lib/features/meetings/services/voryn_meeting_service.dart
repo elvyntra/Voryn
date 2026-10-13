@@ -400,5 +400,32 @@ class VorynMeetingService {
       return true;
     }).toList();
   }
+
+  /// Hides/removes an individual meeting from the current user's personal history.
+  Future<bool> deletePastMeeting(String meetingId) async {
+    final client = _safeClient;
+    if (client == null || client.auth.currentUser == null) return false;
+    try {
+      final dynamic res = await client.rpc(
+        'delete_meeting_history_item',
+        params: {'p_meeting_id': meetingId},
+      );
+      return res == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Hides/clears all past (ended/cancelled) meetings from current user's list.
+  Future<bool> clearPastMeetings() async {
+    final client = _safeClient;
+    if (client == null || client.auth.currentUser == null) return false;
+    try {
+      await client.rpc('clear_my_past_meetings');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
