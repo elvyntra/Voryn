@@ -29,6 +29,41 @@ object IncomingCallNotificationManager {
     private const val KEY_RECEIVED_AT = "received_at"
     private const val KEY_STATE = "call_state"
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    @Synchronized
+    private fun acquireWakeLock(context: Context) {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                "voryn:incoming_call_wake"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(25000L)
+            }
+            wakeLock = wl
+            Log.d("VorynCall", "[WAKE_LOCK] acquired screen wake lock")
+        } catch (e: Exception) {
+            Log.w("VorynCall", "[WAKE_LOCK] could not acquire screen wake lock: ${e.message}")
+        }
+    }
+
+    @Synchronized
+    fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d("VorynCall", "[WAKE_LOCK] released screen wake lock")
+            }
+        } catch (_: Exception) {}
+        wakeLock = null
+    }
+
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -71,6 +106,10 @@ object IncomingCallNotificationManager {
     }
 
     fun clearPendingIncomingCall(context: Context, callId: String? = null) {
+        releaseWakeLock()
+        if (callId != null) {
+            VorynCallStateManager.recordTerminatedCall(context, callId)
+        }
         VorynCallStateManager.clear(context, callId)
     }
 
@@ -86,6 +125,7 @@ object IncomingCallNotificationManager {
         callType: String,
         mode: IncomingNotificationMode = IncomingNotificationMode.FULL_SCREEN_CALL_STYLE
     ) {
+        acquireWakeLock(context)
         ensureChannel(context)
         recordPendingIncomingCall(context, callId, callType, callerName)
 
@@ -235,6 +275,10 @@ object IncomingCallNotificationManager {
 
     fun cancelIncomingCall(context: Context, callId: String, reason: String = "remote_terminal") {
         try {
+            releaseWakeLock()
+            if (callId.isNotBlank()) {
+                VorynCallStateManager.recordTerminatedCall(context, callId)
+            }
             if (reason != "accept") {
                 clearPendingIncomingCall(context, callId)
             }

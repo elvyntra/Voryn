@@ -57,14 +57,20 @@ class IncomingCallActivity : Activity() {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
         }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         setContentView(R.layout.activity_incoming_call)
 
         extractExtras(intent)
+
+        if (callId.isNotBlank() && VorynCallStateManager.isCallTerminated(this, callId)) {
+            Log.w("VorynCall", "[LOCKSCREEN] IncomingCallActivity finishing immediately: call $callId is already terminated")
+            finish()
+            return
+        }
 
         try {
             registerReceiver(userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT))
@@ -155,6 +161,10 @@ class IncomingCallActivity : Activity() {
 
     private fun handleDecline() {
         Log.d("VorynCall", "[NATIVE_CALL] decline")
+        IncomingCallNotificationManager.releaseWakeLock()
+        if (callId.isNotBlank()) {
+            VorynCallStateManager.recordTerminatedCall(this, callId)
+        }
         IncomingCallNotificationManager.clearPendingIncomingCall(this, callId)
         IncomingCallRingtoneManager.stop("decline", if (callId.isNotBlank()) callId else null)
         cancelCallNotification()
@@ -170,6 +180,7 @@ class IncomingCallActivity : Activity() {
     }
 
     private fun handleAccept() {
+        IncomingCallNotificationManager.releaseWakeLock()
         val acceptTimestamp = android.os.SystemClock.elapsedRealtime()
         Log.d("VorynCall", "[LOCK_ACCEPT] accept_tap callId=$callId")
         Log.d("VorynCall", "[CALL_LATENCY] accept_tap_native callId=$callId elapsed=0ms")

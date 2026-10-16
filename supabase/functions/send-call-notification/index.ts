@@ -190,10 +190,12 @@ Deno.serve(async (request) => {
               callType: call.call_type ?? 'audio',
               caller_name: callerName,
               callerName: callerName,
+              sent_at: Date.now().toString(),
             },
             android: {
               priority: 'high',
-              ttl: '30s',
+              ttl: '20s',
+              collapse_key: `voryn_call_${callId}`,
             },
           },
         }),
@@ -204,6 +206,15 @@ Deno.serve(async (request) => {
           console.log(`[FCM_CALL] send_success callId=${callId} messageId=${resJson.name}`);
         } else {
           console.error(`[FCM_CALL] send_failure callId=${callId} code=${resJson?.error?.code ?? response.status}`);
+          if (
+            response.status === 404 ||
+            response.status === 410 ||
+            resJson?.error?.status === 'NOT_FOUND' ||
+            resJson?.error?.details?.some((d: any) => d.errorCode === 'UNREGISTERED')
+          ) {
+            console.log(`[FCM_CALL] pruning unregistered token for user ${targetRecipientUid}`);
+            await admin.from('user_devices').delete().eq('push_token', token);
+          }
         }
       } catch (_) {}
       return response;

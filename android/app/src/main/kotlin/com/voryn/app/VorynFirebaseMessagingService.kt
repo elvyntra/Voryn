@@ -25,6 +25,21 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
             "incoming_call" -> {
                 if (callId.isBlank()) return
 
+                val now = System.currentTimeMillis()
+                val sentTime = remoteMessage.sentTime
+                val backendSentAt = data["sent_at"]?.toLongOrNull() ?: 0L
+                val isStale = (sentTime > 0L && (now - sentTime) > 25000L) ||
+                              (backendSentAt > 0L && (now - backendSentAt) > 25000L)
+                if (isStale) {
+                    Log.w("VorynCall", "[FCM_NATIVE] incoming_call dropped: stale push (sentTime=$sentTime sentAt=$backendSentAt now=$now elapsed=${now - sentTime}ms) callId=$callId")
+                    return
+                }
+
+                if (VorynCallStateManager.isCallTerminated(this, callId)) {
+                    Log.w("VorynCall", "[FCM_NATIVE] incoming_call dropped: call $callId was already terminated")
+                    return
+                }
+
                 // Check if user is already in an active or held call
                 if (VorynCallStateManager.hasActiveOrHeldCall(this)) {
                     val multiState = VorynCallStateManager.getMultiCallState(this)
@@ -50,9 +65,8 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
 
                 val existingPending = IncomingCallNotificationManager.getPendingIncomingCall(this)
                 val existingCallId = existingPending?.get("callId") as? String
-                val existingState = existingPending?.get("state") as? String
-                if (existingCallId == callId && (existingState == "accepting" || existingState == "pending_incoming")) {
-                    Log.d("VorynCall", "[FCM_NATIVE] duplicate incoming_call ignored callId=$callId state=$existingState")
+                if (existingCallId == callId) {
+                    Log.d("VorynCall", "[FCM_NATIVE] duplicate incoming_call ignored for callId=$callId")
                     return
                 }
 
@@ -111,6 +125,7 @@ class VorynFirebaseMessagingService : FlutterFirebaseMessagingService() {
             "cancel_call", "call_cancelled", "call_ended", "call_completed", "call_declined", "call_missed" -> {
                 if (callId.isBlank()) return
                 Log.d("VorynCall", "[FCM_NATIVE] terminal push received type=$type callId=$callId")
+                VorynCallStateManager.recordTerminatedCall(this, callId)
                 val multiState = VorynCallStateManager.getMultiCallState(this)
                 if (multiState.waitingCallId == callId) {
                     Log.d("VorynCall", "[FCM_NATIVE] waiting call cancelled callId=$callId")

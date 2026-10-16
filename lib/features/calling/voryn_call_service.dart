@@ -386,6 +386,14 @@ class VorynCallService {
         payload: {'callId': callId, 'status': 'declined'},
       );
     } catch (_) {}
+
+    unawaited(
+      dispatchCallNotificationWithRetry(
+        callId: callId,
+        extraBody: {'action': 'cancel'},
+        maxAttempts: 2,
+      ),
+    );
   }
 
   Future<Map<String, dynamic>?> holdAndAccept({

@@ -23,6 +23,7 @@ class IncomingCallActionReceiver : BroadcastReceiver() {
             if (!ok) {
                 return
             }
+            IncomingCallNotificationManager.releaseWakeLock()
             IncomingCallRingtoneManager.stop("accept", if (callId.isNotBlank()) callId else null)
             IncomingCallActivity.dismiss()
 
@@ -77,6 +78,9 @@ class IncomingCallActionReceiver : BroadcastReceiver() {
             }
         } else if (action == "com.voryn.app.ACTION_DECLINE_WAITING_CALL") {
             Log.d("VorynCall", "[CALL_WAITING] Decline tapped from waiting notification callId=$callId")
+            if (callId.isNotBlank()) {
+                VorynCallStateManager.recordTerminatedCall(context, callId)
+            }
             IncomingCallNotificationManager.cancelWaitingCallNotification(context, callId)
             VorynCallStateManager.clearWaitingCall(context, callId)
 
@@ -87,6 +91,10 @@ class IncomingCallActionReceiver : BroadcastReceiver() {
 
             VorynCallPlatformBridge.notifyCallWaitingCancelled(callId)
         } else if (action == "com.voryn.app.ACTION_DECLINE_CALL" || action == "decline") {
+            IncomingCallNotificationManager.releaseWakeLock()
+            if (callId.isNotBlank()) {
+                VorynCallStateManager.recordTerminatedCall(context, callId)
+            }
             IncomingCallNotificationManager.clearPendingIncomingCall(context, callId)
             IncomingCallRingtoneManager.stop("decline", if (callId.isNotBlank()) callId else null)
             IncomingCallActivity.dismiss()

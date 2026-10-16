@@ -27,6 +27,58 @@ object VorynCallStateManager {
     private const val KEY_WAITING_CALL_TYPE = "waiting_call_type"
     private const val KEY_WAITING_RECEIVED_AT = "waiting_received_at"
 
+    private const val PREFS_TERMINATED = "voryn_terminated_calls_v1"
+    private const val MAX_TERMINATED_CACHE = 50
+    private const val TERMINATED_RETENTION_MS = 15 * 60 * 1000L // 15 minutes
+
+    @Volatile
+    private var inMemoryTerminatedCalls = object : LinkedHashMap<String, Long>(MAX_TERMINATED_CACHE, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
+            return size > MAX_TERMINATED_CACHE
+        }
+    }
+
+    @Synchronized
+    fun recordTerminatedCall(context: Context, callId: String) {
+        if (callId.isBlank()) return
+        val now = System.currentTimeMillis()
+        inMemoryTerminatedCalls[callId] = now
+        try {
+            val prefs = context.getSharedPreferences(PREFS_TERMINATED, Context.MODE_PRIVATE)
+            prefs.edit().putLong(callId, now).apply()
+        } catch (_: Exception) {}
+        Log.d(TAG, "[CALL_STATE] recordTerminatedCall callId=$callId")
+    }
+
+    @Synchronized
+    fun isCallTerminated(context: Context, callId: String): Boolean {
+        if (callId.isBlank()) return false
+        val now = System.currentTimeMillis()
+
+        val inMemTime = inMemoryTerminatedCalls[callId]
+        if (inMemTime != null) {
+            if ((now - inMemTime) < TERMINATED_RETENTION_MS) {
+                return true
+            } else {
+                inMemoryTerminatedCalls.remove(callId)
+            }
+        }
+
+        try {
+            val prefs = context.getSharedPreferences(PREFS_TERMINATED, Context.MODE_PRIVATE)
+            val termTime = prefs.getLong(callId, 0L)
+            if (termTime > 0L) {
+                if ((now - termTime) < TERMINATED_RETENTION_MS) {
+                    inMemoryTerminatedCalls[callId] = termTime
+                    return true
+                } else {
+                    prefs.edit().remove(callId).apply()
+                }
+            }
+        } catch (_: Exception) {}
+        return false
+    }
+
     enum class CallState {
         NONE,
         RINGING,
@@ -292,6 +344,7 @@ object VorynCallStateManager {
 
     @Synchronized
     fun clearHeldCall(context: Context, heldCallId: String) {
+        recordTerminatedCall(context, heldCallId)
         val s = getMultiCallState(context)
         if (s.heldCallId == heldCallId) {
             inMemoryMultiCallState = inMemoryMultiCallState.copy(heldCallId = null)
@@ -308,6 +361,7 @@ object VorynCallStateManager {
 
     @Synchronized
     fun clearWaitingCall(context: Context, callId: String) {
+        recordTerminatedCall(context, callId)
         val s = getMultiCallState(context)
         if (s.waitingCallId == callId) {
             inMemoryMultiCallState = inMemoryMultiCallState.copy(waitingCallId = null)
@@ -505,6 +559,7 @@ object VorynCallStateManager {
         val isTerminal = (newState == CallState.TERMINAL || newState == CallState.NONE)
 
         if (isTerminal) {
+            recordTerminatedCall(context, callId)
             VorynCallHostManager.releaseCall(callId, VorynCallHostManager.getActiveHost())
             // If a held call exists, promote it to active!
             if (s.heldCallId != null) {
@@ -599,6 +654,9 @@ object VorynCallStateManager {
 
     @Synchronized
     fun clear(context: Context, callId: String? = null) {
+        if (callId != null) {
+            recordTerminatedCall(context, callId)
+        }
         val s = getMultiCallState(context)
         if (callId != null) {
             if (s.waitingCallId == callId) {
