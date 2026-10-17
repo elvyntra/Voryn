@@ -101,6 +101,7 @@ class GroupCallScreenState extends State<GroupCallScreen> {
   bool _cameraEnabled = true;
   bool _speakerOn = true;
   bool _screenSharing = false;
+  String? _fullscreenParticipantId;
 
   bool _ending = false;
   bool _ended = false;
@@ -755,11 +756,344 @@ class GroupCallScreenState extends State<GroupCallScreen> {
     List<GroupCallParticipant> participants,
     bool hasAnyVideo,
   ) {
+    if (participants.length >= 3 &&
+        _fullscreenParticipantId != null &&
+        participants.any((p) => p.id == _fullscreenParticipantId)) {
+      return _buildFullscreenParticipantStage(context, participants);
+    }
+
     if (hasAnyVideo) {
       return _buildVideoGrid(context, participants);
     } else {
       return _buildAudioGrid(context, participants);
     }
+  }
+
+  Widget _buildFullscreenParticipantStage(
+    BuildContext context,
+    List<GroupCallParticipant> participants,
+  ) {
+    final dominant = participants.firstWhere(
+      (p) => p.id == _fullscreenParticipantId,
+      orElse: () => participants.first,
+    );
+    final otherParticipants =
+        participants.where((p) => p.id != dominant.id).toList();
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: _buildVideoTile(
+            context,
+            dominant,
+            isFullscreen: true,
+          ),
+        ),
+
+        // "All Screens Equal" toggle button
+        Positioned(
+          top: _controlsVisible ? 72 : 24,
+          right: 16,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              key: const Key('equal_screen_btn'),
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => setState(() => _fullscreenParticipantId = null),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.75),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFF008F66).withValues(alpha: 0.6),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.grid_view_rounded,
+                      size: 16,
+                      color: Color(0xFF22C55E),
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      'All Screens Equal',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Dynamic PiP strip for other participants
+        Positioned(
+          left: 12,
+          right: 12,
+          bottom: _controlsVisible ? 120 : 24,
+          height: 100,
+          child: ListView.separated(
+            key: const Key('group_pip_deck'),
+            scrollDirection: Axis.horizontal,
+            itemCount: otherParticipants.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, i) {
+              final p = otherParticipants[i];
+              return GestureDetector(
+                key: ValueKey('pip_switch_${p.id}'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  setState(() {
+                    _fullscreenParticipantId = p.id;
+                  });
+                },
+                child: Container(
+                  width: 80,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF17171a),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: p.isSpeaking
+                          ? const Color(0xFF22C55E)
+                          : Colors.white24,
+                      width: p.isSpeaking ? 2.0 : 1.0,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (p.videoTrack != null && !p.isCameraOff)
+                        ConferenceVideoTrackSurface(
+                          track: p.videoTrack!,
+                          mirrorMode: p.isYou
+                              ? livekit.VideoViewMirrorMode.mirror
+                              : livekit.VideoViewMirrorMode.off,
+                          fit: livekit.VideoViewFit.cover,
+                        )
+                      else
+                        _buildAvatarPlaceholder(context, p),
+
+                      Positioned(
+                        left: 4,
+                        right: 4,
+                        bottom: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  p.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                p.isMuted
+                                    ? Icons.mic_off_rounded
+                                    : Icons.mic_rounded,
+                                size: 10,
+                                color: p.isMuted
+                                    ? const Color(0xFFF87171)
+                                    : const Color(0xFF22C55E),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDynamicEqualGrid(
+    BuildContext context,
+    List<GroupCallParticipant> participants, {
+    bool isAudioOnly = false,
+  }) {
+    final count = participants.length;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        final totalW = constraints.maxWidth;
+        final totalH = constraints.maxHeight;
+        const gap = 8.0;
+
+        if (count == 3) {
+          if (isLandscape) {
+            final colW = (totalW - (2 * gap)) / 3;
+            return Row(
+              children: [
+                for (int i = 0; i < 3; i++) ...[
+                  if (i > 0) const SizedBox(width: gap),
+                  SizedBox(
+                    width: colW,
+                    height: totalH,
+                    child: isAudioOnly
+                        ? _buildAudioTile(context, participants[i], canFullscreen: true)
+                        : _buildVideoTile(context, participants[i], canFullscreen: true),
+                  ),
+                ],
+              ],
+            );
+          } else {
+            final rowH = (totalH - (2 * gap)) / 3;
+            return Column(
+              children: [
+                for (int i = 0; i < 3; i++) ...[
+                  if (i > 0) const SizedBox(height: gap),
+                  SizedBox(
+                    width: totalW,
+                    height: rowH,
+                    child: isAudioOnly
+                        ? _buildAudioTile(context, participants[i], canFullscreen: true)
+                        : _buildVideoTile(context, participants[i], canFullscreen: true),
+                  ),
+                ],
+              ],
+            );
+          }
+        }
+
+        if (count == 4) {
+          final rowH = (totalH - gap) / 2;
+          final colW = (totalW - gap) / 2;
+          return Column(
+            children: [
+              SizedBox(
+                height: rowH,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: colW,
+                      height: rowH,
+                      child: isAudioOnly
+                          ? _buildAudioTile(context, participants[0], canFullscreen: true)
+                          : _buildVideoTile(context, participants[0], canFullscreen: true),
+                    ),
+                    const SizedBox(width: gap),
+                    SizedBox(
+                      width: colW,
+                      height: rowH,
+                      child: isAudioOnly
+                          ? _buildAudioTile(context, participants[1], canFullscreen: true)
+                          : _buildVideoTile(context, participants[1], canFullscreen: true),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: gap),
+              SizedBox(
+                height: rowH,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: colW,
+                      height: rowH,
+                      child: isAudioOnly
+                          ? _buildAudioTile(context, participants[2], canFullscreen: true)
+                          : _buildVideoTile(context, participants[2], canFullscreen: true),
+                    ),
+                    const SizedBox(width: gap),
+                    SizedBox(
+                      width: colW,
+                      height: rowH,
+                      child: isAudioOnly
+                          ? _buildAudioTile(context, participants[3], canFullscreen: true)
+                          : _buildVideoTile(context, participants[3], canFullscreen: true),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
+
+        final cols = isLandscape ? 3 : 2;
+        final rows = (count + cols - 1) ~/ cols;
+        final rowH = (totalH - (rows - 1) * gap) / rows;
+        final effectiveRowH = rowH < 100 ? 120.0 : rowH;
+        final useScroll = rowH < 100;
+
+        Widget content = Column(
+          children: [
+            for (int r = 0; r < rows; r++) ...[
+              if (r > 0) const SizedBox(height: gap),
+              SizedBox(
+                height: effectiveRowH,
+                child: Row(
+                  children: [
+                    for (int c = 0; c < cols; c++) ...[
+                      if (c > 0) const SizedBox(width: gap),
+                      Expanded(
+                        child: (r * cols + c < count)
+                            ? (isAudioOnly
+                                ? _buildAudioTile(
+                                    context,
+                                    participants[r * cols + c],
+                                    canFullscreen: true,
+                                  )
+                                : _buildVideoTile(
+                                    context,
+                                    participants[r * cols + c],
+                                    canFullscreen: true,
+                                  ))
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
+        );
+
+        if (useScroll) {
+          return SingleChildScrollView(child: content);
+        }
+        return content;
+      },
+    );
   }
 
   Widget _buildVideoGrid(
@@ -778,36 +1112,10 @@ class GroupCallScreenState extends State<GroupCallScreen> {
           ],
         ),
       );
-    } else if (count <= 4) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: GridView.builder(
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: count,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 1.0,
-          ),
-          itemBuilder: (context, i) => _buildVideoTile(context, participants[i]),
-        ),
-      );
     } else {
-      final screenWidth = MediaQuery.sizeOf(context).width;
-      final crossAxisCount = screenWidth > 700 ? 3 : 2;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: GridView.builder(
-          itemCount: count,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 1.0,
-          ),
-          itemBuilder: (context, i) => _buildVideoTile(context, participants[i]),
-        ),
+        child: _buildDynamicEqualGrid(context, participants, isAudioOnly: false),
       );
     }
   }
@@ -821,40 +1129,52 @@ class GroupCallScreenState extends State<GroupCallScreen> {
     final crossAxisCount = (count <= 2) ? 1 : (screenWidth > 700 ? 3 : 2);
     final isSingleCol = crossAxisCount == 1;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: GridView.builder(
-        physics: count <= 4
-            ? const NeverScrollableScrollPhysics()
-            : const AlwaysScrollableScrollPhysics(),
-        itemCount: count,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: crossAxisCount,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: isSingleCol ? 2.2 : 1.1,
+    if (count <= 2) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: GridView.builder(
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: count,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: isSingleCol ? 2.2 : 1.1,
+          ),
+          itemBuilder: (context, i) => _buildAudioTile(context, participants[i]),
         ),
-        itemBuilder: (context, i) => _buildAudioTile(context, participants[i]),
-      ),
-    );
+      );
+    } else {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: _buildDynamicEqualGrid(context, participants, isAudioOnly: true),
+      );
+    }
   }
 
-  Widget _buildVideoTile(BuildContext context, GroupCallParticipant p) {
+  Widget _buildVideoTile(
+    BuildContext context,
+    GroupCallParticipant p, {
+    bool canFullscreen = false,
+    bool isFullscreen = false,
+  }) {
     final hasTrack = p.videoTrack != null && !p.isCameraOff;
 
-    return Container(
+    final tile = Container(
       key: ValueKey('tile_${p.id}'),
       decoration: BoxDecoration(
         color: const Color(0xFF17171a),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: p.isSpeaking
-              ? const Color(0xFF22C55E)
-              : (p.isYou
-                  ? const Color(0xFF008F66).withValues(alpha: 0.35)
-                  : Colors.white10),
-          width: p.isSpeaking ? 2.0 : 1.0,
-        ),
+        borderRadius: BorderRadius.circular(isFullscreen ? 0 : 16),
+        border: isFullscreen
+            ? null
+            : Border.all(
+                color: p.isSpeaking
+                    ? const Color(0xFF22C55E)
+                    : (p.isYou
+                        ? const Color(0xFF008F66).withValues(alpha: 0.35)
+                        : Colors.white10),
+                width: p.isSpeaking ? 2.0 : 1.0,
+              ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -896,6 +1216,33 @@ class GroupCallScreenState extends State<GroupCallScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+
+          if (canFullscreen)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: GestureDetector(
+                key: ValueKey('fullscreen_btn_${p.id}'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  setState(() {
+                    _fullscreenParticipantId = p.id;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.7),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.fullscreen_rounded,
+                    size: 16,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),
@@ -946,10 +1293,16 @@ class GroupCallScreenState extends State<GroupCallScreen> {
         ],
       ),
     );
+
+    return tile;
   }
 
-  Widget _buildAudioTile(BuildContext context, GroupCallParticipant p) {
-    return Container(
+  Widget _buildAudioTile(
+    BuildContext context,
+    GroupCallParticipant p, {
+    bool canFullscreen = false,
+  }) {
+    final tile = Container(
       key: ValueKey('audio_tile_${p.id}'),
       decoration: BoxDecoration(
         color: const Color(0xFF17171a),
@@ -964,64 +1317,96 @@ class GroupCallScreenState extends State<GroupCallScreen> {
         ),
       ),
       padding: const EdgeInsets.all(12),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Stack(
         children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              if (p.isSpeaking)
-                Container(
-                  width: 68,
-                  height: 68,
+          if (canFullscreen)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: GestureDetector(
+                key: ValueKey('fullscreen_btn_${p.id}'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  setState(() {
+                    _fullscreenParticipantId = p.id;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.7),
                     shape: BoxShape.circle,
-                    border: Border.all(color: const Color(0xFF22C55E), width: 2),
                   ),
-                ),
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: const Color(0xFF202024),
-                child: Text(
-                  p.initials,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
+                  child: const Icon(
+                    Icons.fullscreen_rounded,
+                    size: 16,
                     color: Colors.white,
                   ),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisSize: MainAxisSize.min,
+            ),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Flexible(
-                child: Text(
-                  p.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (p.isSpeaking)
+                    Container(
+                      width: 68,
+                      height: 68,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFF22C55E), width: 2),
+                      ),
+                    ),
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: const Color(0xFF202024),
+                    child: Text(
+                      p.initials,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-              const SizedBox(width: 6),
-              Icon(
-                p.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
-                size: 14,
-                color: p.isMuted
-                    ? const Color(0xFFF87171)
-                    : const Color(0xFF22C55E),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    p.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                    size: 14,
+                    color: p.isMuted
+                        ? const Color(0xFFF87171)
+                        : const Color(0xFF22C55E),
+                  ),
+                ],
               ),
             ],
           ),
         ],
       ),
     );
+
+    return tile;
   }
 
   Widget _buildAvatarPlaceholder(BuildContext context, GroupCallParticipant p) {
