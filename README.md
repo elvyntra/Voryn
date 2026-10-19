@@ -26,6 +26,22 @@
 
 ---
 
+## 📸 Visual Showcase
+
+<div align="center">
+
+| **1-on-1 Video Call with PiP** | **Active Meeting Room** | **Connect & Discovery** |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/video_call_pip.png" width="260" alt="Video Call with PiP" /> | <img src="docs/screenshots/meeting_room.png" width="260" alt="Active Meeting Room" /> | <img src="docs/screenshots/connect_discovery.png" width="260" alt="Connect & Discovery" /> |
+
+| **Direct Chat & Quick Replies** | **Message Long-Press Actions** | **Multi-Select Batch Delete** |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/chat_thread.png" width="260" alt="Direct Messaging" /> | <img src="docs/screenshots/message_actions.png" width="260" alt="Message Actions" /> | <img src="docs/screenshots/meetings_multiselect.png" width="260" alt="Multi-Select Batch Delete" /> |
+
+</div>
+
+---
+
 ## ✨ Key Features
 
 ### 📞 1-on-1 Direct Calling (Audio & Video)
@@ -34,6 +50,7 @@
 - **In-Call Screen Sharing:** Native Android `MediaProjection` integration with a dedicated foreground service and dynamic remote surface rendering.
 - **Full Lock-Screen Incoming Calls:** Native Android `ConnectionService` and `TelecomManager` integration (`VorynCallActivity`) wake the device with custom full-screen call alerts.
 - **Persistent Mini Call Bar:** Minimize active calls to continue browsing chats, contacts, or history without interrupting audio or video.
+- **Draggable Picture-in-Picture (PiP):** Floating interactive local preview that can be positioned anywhere across the screen.
 
 ### 👥 Merged Conference Calling
 - **Merge 2 Active Calls:** Seamlessly merge an active call and a call-on-hold into a synchronized 3-way conference call.
@@ -50,7 +67,8 @@
 
 ### 💬 Real-Time Messaging & Conversations
 - **Direct Chat Threads:** High-speed real-time messaging with instant delivery receipts and read indicators.
-- **Message Actions:** Long-press to **Reply**, **Copy**, **Forward**, **Edit**, or **Delete** messages with a streamlined bottom action sheet.
+- **Message Actions:** Long-press any message to **Reply**, **Copy**, **Forward**, or **Delete** with an intuitive modal sheet.
+- **Quick Reply Chips:** Instant context responses ("Call me back when free", "Can't talk right now", "Remind to call").
 
 ### 🔍 Connect & Privacy-First Discovery
 - **Exact Lookups:** Discover people exclusively via verified **Voryn ID** or normalized phone numbers.
@@ -126,6 +144,7 @@ voryn/
 ├── android/                 # Native Android configuration, Telecom service & MediaProjection
 ├── assets/                  # App branding, SVG logos, and vector assets
 ├── docs/                    # Architecture blueprints, protocol contracts & audit records
+│   ├── screenshots/         # Production app screenshots
 │   ├── MC_1_MERGE_CALLS_ARCHITECTURE.md
 │   ├── MEET_1_MEETINGS_ARCHITECTURE.md
 │   └── VORYN_MASTER_CONTEXT.md
